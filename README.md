@@ -30,7 +30,6 @@ lidar_inertial_odometry/
 ├── app/                  # Application executables
 │   └── lio_player.cpp    # Dataset player with visualization
 │
-├── build/                # Build directory (gitignored)
 ├── CMakeLists.txt        # CMake build configuration
 └── README.md             # This file
 ```
@@ -44,4 +43,3 @@ lidar_inertial_odometry/
 - **Pangolin** (≥ 0.6): 3D visualization
 - **GLEW**: OpenGL extension wrangling
 - **spdlog** (≥ 1.8): Logging
-
