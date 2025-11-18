@@ -431,13 +431,29 @@ int main(int argc, char** argv) {
         double event_time = event.timestamp - start_time;
         double target_time = event_time / playback_speed;
         
-        // Wait until it's time to process this event
-        auto now = std::chrono::steady_clock::now();
-        double elapsed = std::chrono::duration<double>(now - playback_start).count();
-        double wait_time = target_time - elapsed;
+        // Wait until it's time to process this event (only if auto playback is enabled)
+        if (viewer.IsAutoPlaybackEnabled()) {
+            auto now = std::chrono::steady_clock::now();
+            double elapsed = std::chrono::duration<double>(now - playback_start).count();
+            double wait_time = target_time - elapsed;
+            
+            if (wait_time > 0) {
+                std::this_thread::sleep_for(std::chrono::duration<double>(wait_time));
+            }
+        } else {
+            // In step-by-step mode, wait for step forward request (only on LiDAR frames)
+            if (event.type == lio::SensorType::LIDAR) {
+                // Check auto playback state inside the loop to allow immediate exit
+                while (!viewer.WasStepForwardRequested() && 
+                       !viewer.ShouldClose() && 
+                       !viewer.IsAutoPlaybackEnabled()) {  // Exit if auto playback is re-enabled
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        }
         
-        if (wait_time > 0) {
-            std::this_thread::sleep_for(std::chrono::duration<double>(wait_time));
+        if (viewer.ShouldClose()) {
+            break;
         }
         
         if (event.type == lio::SensorType::IMU) {
@@ -497,6 +513,12 @@ int main(int argc, char** argv) {
                 viewer.UpdatePointCloud(cloud, current_pose);
                 viewer.AddTrajectoryPoint(current_pose);
                 viewer.UpdateStateInfo(lidar_frame_count, cloud->size());
+                
+                // Update map visualization
+                lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
+                if (map_cloud) {
+                    viewer.UpdateMapPointCloud(map_cloud);
+                }
                 
                 spdlog::info("[Frame {:4d}] Loaded LiDAR scan {:06d} with {:5d} points @ {:.3f}s | Pos: [{:.2f}, {:.2f}, {:.2f}]", 
                             lidar_frame_count, lidar.scan_index, cloud->size(), 

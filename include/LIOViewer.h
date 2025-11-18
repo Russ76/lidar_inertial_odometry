@@ -115,6 +115,29 @@ public:
      * @param num_points Number of points in current frame
      */
     void UpdateStateInfo(int frame_id, int num_points);
+    
+    /**
+     * @brief Update map point cloud
+     * @param map_cloud Map point cloud to display
+     */
+    void UpdateMapPointCloud(PointCloudPtr map_cloud);
+    
+    /**
+     * @brief Check if auto playback is enabled
+     * @return True if auto playback is on
+     */
+    bool IsAutoPlaybackEnabled() const { return m_auto_playback.Get(); }
+    
+    /**
+     * @brief Check if step forward was requested
+     * @return True if step forward button was pressed
+     */
+    bool WasStepForwardRequested() {
+        if (pangolin::Pushed(m_step_forward_button)) {
+            return true;
+        }
+        return false;
+    }
 
 private:
     // ===== Pangolin Components =====
@@ -128,6 +151,7 @@ private:
     
     // ===== Data Storage =====
     PointCloudPtr m_current_cloud;                     ///< Current point cloud
+    PointCloudPtr m_map_cloud;                         ///< Map point cloud
     Eigen::Matrix4f m_current_pose;                    ///< Current pose
     std::vector<Eigen::Matrix4f> m_trajectory;         ///< Trajectory
     std::deque<IMUPlotData> m_imu_buffer;              ///< IMU data buffer for plotting
@@ -145,6 +169,9 @@ private:
     pangolin::Var<bool> m_show_trajectory;             ///< Show trajectory checkbox
     pangolin::Var<bool> m_show_coordinate_frame;       ///< Show coordinate frame checkbox
     pangolin::Var<bool> m_show_imu_plots;              ///< Show IMU plots checkbox
+    pangolin::Var<bool> m_show_map;                    ///< Show map checkbox
+    pangolin::Var<bool> m_auto_playback;               ///< Auto playback mode
+    pangolin::Var<bool> m_step_forward_button;         ///< Step forward button
     pangolin::Var<int> m_frame_id;                     ///< Current frame ID
     pangolin::Var<int> m_total_points;                 ///< Total points in frame
     
@@ -182,6 +209,11 @@ private:
      * @brief Draw point cloud
      */
     void DrawPointCloud();
+    
+    /**
+     * @brief Draw map point cloud with transparency
+     */
+    void DrawMapPointCloud();
     
     /**
      * @brief Draw trajectory

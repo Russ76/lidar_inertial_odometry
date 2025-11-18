@@ -435,6 +435,69 @@ private:
 };
 
 /**
+ * @brief Frustum culling filter for sensor FOV-based filtering
+ * Filters points based on current sensor pose and field of view
+ */
+class FrustumFilter {
+public:
+    FrustumFilter() 
+        : m_horizontal_fov(90.0f)  // degrees, total FOV
+        , m_vertical_fov(90.0f)    // degrees, total FOV
+        , m_max_range(30.0f)       // meters
+        , m_R_sw(Eigen::Matrix3f::Identity())
+        , m_t_sw(Eigen::Vector3f::Zero())
+    {}
+    
+    /**
+     * @brief Set sensor pose (world frame to sensor frame transformation)
+     * @param R_sw Rotation matrix from world to sensor  
+     * @param t_sw Translation vector from world to sensor
+     * 
+     * This computes: p_sensor = R_sw * p_world + t_sw
+     */
+    void SetSensorPose(const Eigen::Matrix3f& R_sw, const Eigen::Vector3f& t_sw) {
+        m_R_sw = R_sw;
+        m_t_sw = t_sw;
+    }
+    
+    /**
+     * @brief Set field of view
+     * @param horizontal_fov Horizontal FOV in degrees (total, not half-angle)
+     * @param vertical_fov Vertical FOV in degrees (total, not half-angle)
+     */
+    void SetFOV(float horizontal_fov, float vertical_fov) {
+        m_horizontal_fov = horizontal_fov;
+        m_vertical_fov = vertical_fov;
+    }
+    
+    /**
+     * @brief Set maximum range
+     * @param max_range Maximum distance in meters
+     */
+    void SetMaxRange(float max_range) {
+        m_max_range = max_range;
+    }
+    
+    void SetInputCloud(const PointCloud::ConstPtr& cloud) { m_input_cloud = cloud; }
+    
+    /**
+     * @brief Filter points within sensor frustum
+     * Transforms points to sensor frame and checks FOV/range constraints
+     */
+    void Filter(PointCloud& output);
+    
+private:
+    float m_horizontal_fov;  // Total horizontal FOV in degrees
+    float m_vertical_fov;    // Total vertical FOV in degrees
+    float m_max_range;       // Maximum range in meters
+    
+    Eigen::Matrix3f m_R_sw;  // World to sensor rotation
+    Eigen::Vector3f m_t_sw;  // World to sensor translation
+    
+    PointCloud::ConstPtr m_input_cloud;
+};
+
+/**
  * @brief Range filter for distance-based filtering
  */
 class RangeFilter {

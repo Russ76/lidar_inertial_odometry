@@ -80,7 +80,7 @@ public:
     /// Initialize estimator with first IMU measurement
     void Initialize(const IMUData& first_imu);
     
-    /// Initialize gravity direction with multiple IMU samples (FAST-LIO style)
+    /// Initialize gravity direction with multiple IMU samples
     bool GravityInitialization(const std::vector<IMUData>& imu_buffer);
     
     /// Process new IMU measurement
@@ -94,6 +94,12 @@ public:
     
     /// Get trajectory history
     std::vector<State> GetTrajectory() const;
+    
+    /// Get local map point cloud
+    PointCloudPtr GetMapPointCloud() const {
+        std::lock_guard<std::mutex> lock(m_map_mutex);
+        return m_map_cloud;
+    }
     
     /// Check if system is initialized
     bool IsInitialized() const { return m_initialized; }
@@ -145,7 +151,8 @@ private:
     void UpdateWithLidar(const LidarData& lidar);
     
     /// Find point-to-plane correspondences
-    std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>> 
+    /// Returns: vector of (p_lidar, plane_normal, plane_d)
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>> 
     FindCorrespondences(const PointCloudPtr scan);
     
     /// Update local map with new scan
@@ -159,7 +166,7 @@ private:
                               std::vector<MapPoint>& features);
     
     /// Compute Jacobians for point-to-plane residuals
-    void ComputeLidarJacobians(const std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>>& correspondences,
+    void ComputeLidarJacobians(const std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>>& correspondences,
                               Eigen::MatrixXf& H,
                               Eigen::VectorXf& residual);
     
@@ -177,6 +184,9 @@ private:
     
     /// Update measurement noise matrices
     void UpdateMeasurementNoise(int num_correspondences);
+    
+    /// Apply state correction (manifold update for IEKF)
+    void ApplyStateCorrection(const Eigen::VectorXf& dx);
 
 private:
     // State estimation
@@ -193,6 +203,7 @@ private:
     // Local map storage
     std::vector<MapPoint> m_local_map;
     PointCloudPtr m_map_cloud;
+    std::shared_ptr<KdTree> m_map_kdtree;  // Cached KdTree for map
     mutable std::mutex m_map_mutex;
     
     // Processing statistics
@@ -214,6 +225,11 @@ private:
     bool m_first_lidar_frame;
     double m_last_lidar_time;
     State m_last_lidar_state;
+    
+    // Keyframe management
+    Eigen::Vector3f m_last_keyframe_position;
+    Eigen::Matrix3f m_last_keyframe_rotation;
+    bool m_first_keyframe;
 };
 
 } // namespace lio

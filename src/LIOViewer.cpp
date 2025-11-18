@@ -27,6 +27,9 @@ LIOViewer::LIOViewer()
     , m_show_trajectory("ui.2. Show Trajectory", true, true)
     , m_show_coordinate_frame("ui.3. Show Coordinate Frame", true, true)
     , m_show_imu_plots("ui.4. Show IMU Plots", true, true)
+    , m_show_map("ui.5. Show Map", true, true)
+    , m_auto_playback("ui.6. Auto Playback", true, true)  // Enable auto playback by default
+    , m_step_forward_button("ui.7. Step Forward", false, false)
     , m_frame_id("info.Frame ID", 0)
     , m_total_points("info.Total Points", 0)
     , m_point_size(2.0f)
@@ -159,6 +162,9 @@ void LIOViewer::SetupPanels() {
     pangolin::DisplayBase().AddDisplay(*m_plotter_acc);
     
     spdlog::info("[LIOViewer] UI panel and displays created successfully");
+    spdlog::info("[LIOViewer] Controls:");
+    spdlog::info("  Toggle 'Auto Playback' checkbox to enable/disable automatic playback");
+    spdlog::info("  Click 'Step Forward' button to go to next LiDAR frame (when auto playback is OFF)");
 }
 
 void LIOViewer::Shutdown() {
@@ -220,6 +226,11 @@ void LIOViewer::UpdateStateInfo(int frame_id, int num_points) {
     m_total_points = num_points;
 }
 
+void LIOViewer::UpdateMapPointCloud(PointCloudPtr map_cloud) {
+    std::lock_guard<std::mutex> lock(m_data_mutex);
+    m_map_cloud = map_cloud;
+}
+
 void LIOViewer::RenderLoop() {
     spdlog::info("[LIOViewer] Starting render loop");
     
@@ -239,12 +250,14 @@ void LIOViewer::RenderLoop() {
 
         // Copy data once with single lock
         PointCloudPtr current_cloud_copy;
+        PointCloudPtr map_cloud_copy;
         Eigen::Matrix4f current_pose_copy;
         std::vector<Eigen::Matrix4f> trajectory_copy;
         
         {
             std::lock_guard<std::mutex> lock(m_data_mutex);
             current_cloud_copy = m_current_cloud;
+            map_cloud_copy = m_map_cloud;
             current_pose_copy = m_current_pose;
             trajectory_copy = m_trajectory;
         }
@@ -252,6 +265,10 @@ void LIOViewer::RenderLoop() {
         // Draw 3D content
         if (m_show_coordinate_frame.Get()) {
             DrawCoordinateAxes();
+        }
+
+        if (m_show_map.Get() && map_cloud_copy && !map_cloud_copy->empty()) {
+            DrawMapPointCloud();
         }
 
         if (m_show_point_cloud.Get() && current_cloud_copy && !current_cloud_copy->empty()) {
@@ -339,6 +356,34 @@ void LIOViewer::DrawPointCloud() {
     
     glEnd();
     glPointSize(1.0f);
+}
+
+void LIOViewer::DrawMapPointCloud() {
+    std::lock_guard<std::mutex> lock(m_data_mutex);
+    
+    if (!m_map_cloud || m_map_cloud->empty()) {
+        return;
+    }
+    
+    // Save GL state for alpha blending
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
+    glPointSize(1.5f);  // Smaller than current points
+    glBegin(GL_POINTS);
+    
+    // Draw map points in light gray with low alpha (0.1)
+    glColor4f(0.7f, 0.7f, 0.7f, 0.1f);
+    
+    for (const auto& point : *m_map_cloud) {
+        glVertex3f(point.x, point.y, point.z);
+    }
+    
+    glEnd();
+    glPointSize(1.0f);
+    
+    // Restore GL state
+    glDisable(GL_BLEND);
 }
 
 void LIOViewer::DrawTrajectory() {
