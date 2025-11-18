@@ -12,6 +12,7 @@
 
 #include "LIOViewer.h"
 #include "Estimator.h"
+#include "ConfigUtils.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -321,23 +322,54 @@ int main(int argc, char** argv) {
     spdlog::set_level(spdlog::level::info);
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
     
-    // Parse arguments
+    // Parse arguments: config_path is required, dataset_path is optional
     if (argc < 2) {
-        spdlog::error("Usage: {} <dataset_path>", argv[0]);
-        spdlog::info("Example: {} /home/eugene/data/R3LIVE/hku_main_building", argv[0]);
+        spdlog::error("Usage: {} <config_path> [dataset_path]", argv[0]);
+        spdlog::info("Example: {} ../config/avia.yaml /home/eugene/data/R3LIVE/hku_main_building", argv[0]);
+        spdlog::info("");
+        spdlog::info("Arguments:");
+        spdlog::info("  config_path   : Path to YAML configuration file (required)");
+        spdlog::info("  dataset_path  : Path to dataset directory (optional, overrides config)");
         return 1;
     }
-    
-    std::string dataset_path = argv[1];
-    std::string lidar_folder = dataset_path + "/lidar";
     
     spdlog::info("════════════════════════════════════════════════════════════════");
     spdlog::info("       LiDAR-Inertial Odometry Player - R3LIVE Dataset          ");
     spdlog::info("════════════════════════════════════════════════════════════════");
     
+    // Load configuration
+    lio::LIOConfig config;
+    std::string config_path = argv[1];
+    
+    if (!lio::LoadConfig(config_path, config)) {
+        spdlog::error("Failed to load configuration from: {}", config_path);
+        return 1;
+    }
+    
+    lio::PrintConfig(config);
+    spdlog::info("");
+    
+    // Override dataset path from command line if provided
+    if (argc >= 3) {
+        config.dataset_path = argv[2];
+        config.lidar_folder = config.dataset_path + "/lidar";
+        config.imu_csv_path = config.dataset_path + "/imu_data.csv";
+        config.lidar_timestamps_path = config.dataset_path + "/lidar_timestamps.txt";
+        spdlog::info("Dataset path overridden from command line: {}", config.dataset_path);
+        spdlog::info("");
+    } else if (config.dataset_path.empty()) {
+        spdlog::error("No dataset path provided!");
+        spdlog::info("Please provide dataset path in config file or as command line argument");
+        spdlog::info("Usage: {} <config_path> [dataset_path]", argv[0]);
+        return 1;
+    }
+    
+    std::string dataset_path = config.dataset_path;
+    std::string lidar_folder = config.lidar_folder;
+    
     // Construct file paths
-    std::string imu_csv_path = dataset_path + "/imu_data.csv";
-    std::string lidar_ts_path = dataset_path + "/lidar_timestamps.txt";
+    std::string imu_csv_path = config.imu_csv_path;
+    std::string lidar_ts_path = config.lidar_timestamps_path;
     
     // Load data
     std::vector<lio::IMUData> imu_data;
@@ -366,10 +398,18 @@ int main(int argc, char** argv) {
     spdlog::info("");
     spdlog::info("Initializing viewer...");
     lio::LIOViewer viewer;
-    if (!viewer.Initialize(1920, 1080)) {
+    if (!viewer.Initialize(config.viewer.window_width, config.viewer.window_height)) {
         spdlog::error("Failed to initialize viewer");
         return 1;
     }
+    
+    // Set viewer parameters from config
+    viewer.SetShowPointCloud(config.viewer.show_point_cloud);
+    viewer.SetShowTrajectory(config.viewer.show_trajectory);
+    viewer.SetShowCoordinateFrame(config.viewer.show_coordinate_frame);
+    viewer.SetShowMap(config.viewer.show_map);
+    viewer.SetShowVoxelCubes(config.viewer.show_voxel_cubes);
+    viewer.SetAutoPlayback(config.viewer.auto_playback);
     
     spdlog::info("Viewer initialized successfully!");
     spdlog::info("");
@@ -378,9 +418,39 @@ int main(int argc, char** argv) {
     spdlog::info("Initializing LIO Estimator...");
     lio::Estimator estimator;
     
-    // Collect first 100 IMU samples for gravity initialization (about 0.5 seconds @ 200Hz)
+    // Configure estimator parameters from config
+    estimator.m_params.voxel_size = config.estimator.voxel_size;
+    estimator.m_params.max_correspondence_distance = config.estimator.max_correspondence_distance;
+    estimator.m_params.max_iterations = config.estimator.max_iterations;
+    estimator.m_params.convergence_threshold = config.estimator.convergence_threshold;
+    estimator.m_params.enable_undistortion = config.estimator.enable_undistortion;
+    estimator.m_params.frustum_fov_horizontal = config.estimator.frustum_fov_horizontal;
+    estimator.m_params.frustum_fov_vertical = config.estimator.frustum_fov_vertical;
+    estimator.m_params.frustum_max_range = config.estimator.frustum_max_range;
+    estimator.m_params.keyframe_translation_threshold = config.estimator.keyframe_translation_threshold;
+    estimator.m_params.keyframe_rotation_threshold = config.estimator.keyframe_rotation_threshold;
+    
+    // Configure extrinsics from config
+    estimator.m_params.R_il = config.extrinsics.R_il.cast<float>();
+    estimator.m_params.t_il = config.extrinsics.t_il.cast<float>();
+    
+    spdlog::info("[Estimator] Configured from YAML:");
+    spdlog::info("  Voxel size: {:.2f} m", estimator.m_params.voxel_size);
+    spdlog::info("  Frustum FOV: {:.1f}° × {:.1f}°", 
+                 estimator.m_params.frustum_fov_horizontal, 
+                 estimator.m_params.frustum_fov_vertical);
+    spdlog::info("  Frustum range: {:.1f} m", estimator.m_params.frustum_max_range);
+    spdlog::info("  Keyframe thresholds: {:.2f} m, {:.1f}°", 
+                 estimator.m_params.keyframe_translation_threshold,
+                 estimator.m_params.keyframe_rotation_threshold);
+    spdlog::info("  Extrinsics t_il: [{:.5f}, {:.5f}, {:.5f}]",
+                 estimator.m_params.t_il.x(), 
+                 estimator.m_params.t_il.y(), 
+                 estimator.m_params.t_il.z());
+    
+    // Collect first N IMU samples for gravity initialization (from config)
     std::vector<lio::IMUData> init_imu_buffer;
-    int init_samples = std::min(100, static_cast<int>(imu_data.size()));
+    int init_samples = std::min(config.estimator.init_imu_samples, static_cast<int>(imu_data.size()));
     
     for (int i = 0; i < init_samples; ++i) {
         const auto& imu = imu_data[i];
@@ -412,8 +482,8 @@ int main(int argc, char** argv) {
     spdlog::info("Close viewer window to quit");
     spdlog::info("");
     
-    // Playback parameters
-    double playback_speed = 5.0;  // 5x speed for faster playback
+    // Playback parameters from config
+    double playback_speed = config.playback.playback_speed;
     double start_time = events[start_event_idx].timestamp;
     
     // Current state
@@ -423,16 +493,27 @@ int main(int argc, char** argv) {
     
     // Playback loop
     auto playback_start = std::chrono::steady_clock::now();
+    bool was_auto_playback_enabled = viewer.IsAutoPlaybackEnabled();
     
     for (size_t event_idx = start_event_idx; event_idx < events.size() && !viewer.ShouldClose(); ++event_idx) {
         const auto& event = events[event_idx];
+        
+        // Check if auto playback state changed (turned back on after being off)
+        bool is_auto_playback_enabled = viewer.IsAutoPlaybackEnabled();
+        if (is_auto_playback_enabled && !was_auto_playback_enabled) {
+            // Reset playback timer when auto playback is re-enabled
+            playback_start = std::chrono::steady_clock::now();
+            start_time = event.timestamp;  // Reset start time to current event
+            spdlog::info("Auto playback re-enabled, resetting timer at event {}", event_idx);
+        }
+        was_auto_playback_enabled = is_auto_playback_enabled;
         
         // Calculate target playback time
         double event_time = event.timestamp - start_time;
         double target_time = event_time / playback_speed;
         
         // Wait until it's time to process this event (only if auto playback is enabled)
-        if (viewer.IsAutoPlaybackEnabled()) {
+        if (is_auto_playback_enabled) {
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - playback_start).count();
             double wait_time = target_time - elapsed;
@@ -467,22 +548,8 @@ int main(int argc, char** argv) {
             lio::State state = estimator.GetCurrentState();
             
             // Compute gravity-compensated acceleration (world frame)
-            // acc_world = R * (acc_sensor - bias) + gravity
-            // acc_corrected = R * (acc_sensor - bias)  <- This is what we want to plot
-            Eigen::Vector3f acc_corrected = state.m_rotation * (imu.acc - state.m_acc_bias);
-            Eigen::Vector3f gyr_corrected = imu.gyr - state.m_gyro_bias;
-            
-            // Convert to IMU plot data for viewer (gravity-compensated)
-            lio::IMUPlotData plot_data;
-            plot_data.timestamp = imu.timestamp;
-            plot_data.gyro_x = gyr_corrected.x();
-            plot_data.gyro_y = gyr_corrected.y();
-            plot_data.gyro_z = gyr_corrected.z();
-            plot_data.acc_x = acc_corrected.x();  // Gravity removed!
-            plot_data.acc_y = acc_corrected.y();
-            plot_data.acc_z = acc_corrected.z();
-            
-            viewer.AddIMUMeasurement(plot_data);
+            // Update IMU bias in viewer
+            viewer.UpdateIMUBias(state.m_gyro_bias, state.m_acc_bias);
             
         } else {
             // Process LiDAR data
@@ -514,18 +581,18 @@ int main(int argc, char** argv) {
                 viewer.AddTrajectoryPoint(current_pose);
                 viewer.UpdateStateInfo(lidar_frame_count, cloud->size());
                 
-                // Update map visualization
+                // Update map visualization (choose between point cloud or voxel cubes)
                 lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
                 if (map_cloud) {
                     viewer.UpdateMapPointCloud(map_cloud);
                 }
                 
-                spdlog::info("[Frame {:4d}] Loaded LiDAR scan {:06d} with {:5d} points @ {:.3f}s | Pos: [{:.2f}, {:.2f}, {:.2f}]", 
-                            lidar_frame_count, lidar.scan_index, cloud->size(), 
-                            event.timestamp - start_time,
-                            current_state.m_position.x(),
-                            current_state.m_position.y(),
-                            current_state.m_position.z());
+                // Update voxel map for cube visualization
+                std::shared_ptr<lio::VoxelMap> voxel_map = estimator.GetVoxelMap();
+                if (voxel_map) {
+                    viewer.UpdateVoxelMap(voxel_map);
+                }
+                
                 
             } else {
                 spdlog::warn("Failed to load LiDAR scan: {}", ply_path);

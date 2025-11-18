@@ -8,28 +8,46 @@ set(CMAKE_BUILD_TYPE Release)
 
 # Find packages
 find_package(Eigen3 REQUIRED)
-find_package(spdlog REQUIRED)
-find_package(Pangolin REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(yaml-cpp REQUIRED)
+
+# Use Pangolin from thirdparty
+set(Pangolin_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/pangolin)
+include_directories(${Pangolin_DIR}/include)
+include_directories(${Pangolin_DIR}/build/include)
+link_directories(${Pangolin_DIR}/build)
+
+# Use spdlog from thirdparty (header-only)
+set(spdlog_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/include)
+include_directories(${spdlog_DIR})
 
 # Include directories
-include_directories(include)
-include_directories(app)
 include_directories(src)
+include_directories(src/core)
+include_directories(src/util)
+include_directories(src/viewer)
+include_directories(app)
 
 # Core library (viewer + estimator)
 add_library(lio_viewer
-    src/LIOViewer.cpp
-    src/LieUtils.cpp
-    src/PointCloudUtils.cpp
-    src/State.cpp
-    src/Estimator.cpp
+    src/viewer/LIOViewer.cpp
+    src/util/LieUtils.cpp
+    src/util/PointCloudUtils.cpp
+    src/util/ConfigUtils.cpp
+    src/core/VoxelMap.cpp
+    src/core/State.cpp
+    src/core/Estimator.cpp
 )
 
 target_link_libraries(lio_viewer
     Eigen3::Eigen
-    spdlog::spdlog
-    ${Pangolin_LIBRARIES}
+    yaml-cpp
+    pango_display
+    pango_plot
+    pango_opengl
+    pango_windowing
+    pango_vars
+    pango_core
     GLEW::GLEW
     GL
 )
@@ -42,10 +60,16 @@ add_executable(lio_player
 target_link_libraries(lio_player 
     lio_viewer
     Eigen3::Eigen
-    spdlog::spdlog
-    ${Pangolin_LIBRARIES}
+    yaml-cpp
+    pango_display
+    pango_plot
+    pango_opengl
+    pango_windowing
+    pango_vars
+    pango_core
     GLEW::GLEW
     GL
+    pthread
 )
 
 target_compile_options(lio_player PRIVATE -Wall -Wextra -O2)

@@ -1,0 +1,74 @@
+# LIO Configuration for Livox Avia LiDAR
+# Author: Seungwon Choi
+# Date: 2025-11-19
+
+# Dataset paths (will be overridden by command line argument)
+dataset:
+  lidar_folder: "lidar"
+  imu_csv: "imu_data.csv"
+  lidar_timestamps: "lidar_timestamps.txt"
+
+
+# Extrinsics: LiDAR to IMU transformation
+# T_il: Transformation from IMU frame to LiDAR frame
+# p_l = R_il * p_i + t_il
+extrinsics:
+  # Rotation matrix (3x3) - row-major
+  # R3LIVE/Avia dataset: sensors are aligned (identity matrix)
+  R_il: [
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0]
+  ]
+  # Translation vector (3x1) [meters]
+  # R3LIVE/Avia dataset: LiDAR to IMU translation
+  t_il: [0.04165, 0.02326, -0.0284]
+
+# Estimator parameters
+estimator:
+  enable_undistortion: true
+  scan_duration: 0.1          # LiDAR scan duration in seconds (100ms for Livox Avia)
+  init_imu_samples: 100       # Number of IMU samples for initialization
+  voxel_size: 0.4             # Voxel size in meters for VoxelMap
+  max_correspondences: 2000    # Maximum number of correspondences per frame
+  max_correspondence_distance: 1.0  # Maximum distance for correspondence matching (meters)
+  max_iterations: 10          # Maximum Gauss-Newton iterations
+  convergence_threshold: 1e-4 # Convergence threshold for optimization
+  
+  # Local map parameters
+  frustum_fov_horizontal: 90.0  # Frustum FOV horizontal (degrees, ±35°)
+  frustum_fov_vertical: 90.0    # Frustum FOV vertical (degrees, ±35°)
+  frustum_max_range: 50.0       # Maximum range for frustum culling (meters)
+  
+  # Keyframe parameters
+  keyframe_translation_threshold: 1.0   # Translation threshold for keyframe (meters)
+  keyframe_rotation_threshold: 10.0     # Rotation threshold for keyframe (degrees)
+
+# Viewer parameters
+viewer:
+  window_width: 1920
+  window_height: 1080
+  show_point_cloud: true
+  show_trajectory: true
+  show_coordinate_frame: true
+  show_imu_plots: false        # IMU plots disabled
+  show_map: true               # Show map points by default
+  show_voxel_cubes: false      # Voxel cubes visualization off by default
+  follow_frame: true           # Camera follows robot (smooth mode)
+  auto_playback: true          # Auto playback enabled
+  point_size: 2.0
+  trajectory_width: 3.0
+  coordinate_frame_size: 2.0
+
+# Playback parameters
+playback:
+  playback_speed: 5.0          # Playback speed multiplier
+
+# IMU parameters (Livox Avia built-in IMU)
+imu:
+  gyro_noise_density: 1.75e-4     # Gyroscope noise density [rad/s/sqrt(Hz)]
+  acc_noise_density: 1.86e-3      # Accelerometer noise density [m/s^2/sqrt(Hz)]
+  gyro_bias_random_walk: 1.87e-5  # Gyroscope bias random walk [rad/s^2/sqrt(Hz)]
+  acc_bias_random_walk: 4.33e-4   # Accelerometer bias random walk [m/s^3/sqrt(Hz)]
+  gravity: [0.0, 0.0, -9.81]      # Gravity vector [m/s^2]
+
