@@ -3,30 +3,18 @@
  * @brief     Implementation of tightly-coupled LiDAR-Inertial Odometry Estimator
  * @author    Seungwon Choi
  * @email     csw3575@snu.ac.kr
- * @date      2025    // --- Forward Propagation (Euler integration) ---
-    // dR/dt = R * [omega]_x  =>  R(t+dt) = R(t) * Exp(omega * dt)
-    Eigen::Vector3f omega_f = (omega * dt).cast<float>();
-    Eigen::Matrix3f R_delta_f = SO3::Exp(omega_f).Matrix();
-    Eigen::Matrix3d R_delta = R_delta_f.cast<double>();
-    Eigen::Matrix3d R_new = R * R_delta;18
- * @copyright Copyright (c) 2025 Seungwon Choi. All rights reserved.
+ * @date      2025-11-18
+ * @copyright  Seungwon Choi. All rights reserved.
  *
  * @par License
  * This project is released under the MIT License.
- * 
- * @par Algorithm Overview
- * Tightly-coupled LIO using Iterated Extended Kalman Filter
- * - IMU forward propagation with bias estimation
- * - Point-to-plane residuals as measurements
- * - Iterated Kalman update for state correction
- * - KdTree-based correspondence search
  */
 
 #include "Estimator.h"
 #include "LieUtils.h"
 #include "PointCloudUtils.h"
+#include <spdlog/spdlog.h>
 #include <chrono>
-#include <iostream>
 #include <cmath>
 
 namespace lio {
@@ -37,10 +25,10 @@ namespace lio {
 // ============================================================================
 namespace Extrinsics {
     // Translation from LiDAR to IMU (in meters)
-    const Eigen::Vector3d t_il(0.04165, 0.02326, -0.0284);
+    const Eigen::Vector3f t_il(0.04165f, 0.02326f, -0.0284f);
     
     // Rotation from LiDAR to IMU (identity - sensors are aligned)
-    const Eigen::Matrix3d R_il = Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3f R_il = Eigen::Matrix3f::Identity();
 }
 
 // ============================================================================
@@ -56,7 +44,7 @@ Estimator::Estimator()
     , m_last_lidar_time(0.0)
 {
     // Initialize process noise matrix (Q)
-    m_process_noise = Eigen::Matrix<double, 18, 18>::Identity();
+    m_process_noise = Eigen::Matrix<float, 18, 18>::Identity();
     m_process_noise.block<3,3>(0,0) *= m_params.gyr_noise_std * m_params.gyr_noise_std;
     m_process_noise.block<3,3>(3,3) *= m_params.acc_noise_std * m_params.acc_noise_std;
     m_process_noise.block<3,3>(6,6) *= m_params.acc_noise_std * m_params.acc_noise_std;
@@ -65,7 +53,7 @@ Estimator::Estimator()
     m_process_noise.block<3,3>(15,15) *= m_params.gravity_noise_std * m_params.gravity_noise_std;
     
     // Initialize state transition matrix
-    m_state_transition = Eigen::Matrix<double, 18, 18>::Identity();
+    m_state_transition = Eigen::Matrix<float, 18, 18>::Identity();
     
     // Initialize local map
     m_map_cloud = std::make_shared<PointCloud>();
@@ -79,9 +67,10 @@ Estimator::Estimator()
     m_statistics.avg_translation_error = 0.0;
     m_statistics.avg_rotation_error = 0.0;
     
-    std::cout << "[Estimator] Initialized with hardcoded extrinsics (R3LIVE/Avia dataset)" << std::endl;
-    std::cout << "[Estimator] t_il = [" << Extrinsics::t_il.transpose() << "]" << std::endl;
-    std::cout << "[Estimator] R_il = Identity" << std::endl;
+    spdlog::info("[Estimator] Initialized with hardcoded extrinsics (R3LIVE/Avia dataset)");
+    spdlog::info("[Estimator] t_il = [{:.5f}, {:.5f}, {:.5f}]", 
+                 Extrinsics::t_il.x(), Extrinsics::t_il.y(), Extrinsics::t_il.z());
+    spdlog::info("[Estimator] R_il = Identity");
 }
 
 Estimator::~Estimator() {
@@ -94,36 +83,187 @@ Estimator::~Estimator() {
 // Initialization
 // ============================================================================
 
+bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    
+    if (m_initialized) {
+        spdlog::warn("[Estimator] Already initialized!");
+        return false;
+    }
+    
+    // 1. Check minimum number of samples (need at least 20 for good statistics)
+    if (imu_buffer.size() < 20) {
+        spdlog::error("[Estimator] Not enough IMU data for initialization (need >= 20 samples, got {})", 
+                     imu_buffer.size());
+        return false;
+    }
+    
+    spdlog::info("[Estimator] Starting gravity initialization with {} IMU samples", imu_buffer.size());
+    
+    // 2. Compute mean acceleration and gyroscope (FAST-LIO style running average)
+    Eigen::Vector3f mean_acc = Eigen::Vector3f::Zero();
+    Eigen::Vector3f mean_gyr = Eigen::Vector3f::Zero();
+    
+    for (const auto& imu : imu_buffer) {
+        mean_acc += imu.acc;
+        mean_gyr += imu.gyr;
+    }
+    mean_acc /= static_cast<float>(imu_buffer.size());
+    mean_gyr /= static_cast<float>(imu_buffer.size());
+    
+    // 3. Compute variance to check if robot is stationary
+    float acc_variance = 0.0f;
+    float gyr_variance = 0.0f;
+    
+    for (const auto& imu : imu_buffer) {
+        acc_variance += (imu.acc - mean_acc).squaredNorm();
+        gyr_variance += (imu.gyr - mean_gyr).squaredNorm();
+    }
+    acc_variance /= static_cast<float>(imu_buffer.size());
+    gyr_variance /= static_cast<float>(imu_buffer.size());
+    
+    // 4. Check if robot is stationary (low variance)
+    if (acc_variance > 0.5f) {
+        spdlog::warn("[Estimator] High accelerometer variance ({:.3f}), robot may be moving!", acc_variance);
+        spdlog::warn("[Estimator] Initialization may be inaccurate. Please keep robot stationary.");
+    }
+    
+    if (gyr_variance > 0.01f) {
+        spdlog::warn("[Estimator] High gyroscope variance ({:.3f}), robot may be rotating!", gyr_variance);
+    }
+    
+    // 5. Initialize state
+    m_current_state.Reset();
+    
+    // 6. Check accelerometer norm (should be ~9.81 m/s² if stationary)
+    float acc_norm = mean_acc.norm();
+    
+    if (std::abs(acc_norm - 9.81f) > 1.5f) {
+        spdlog::error("[Estimator] Accelerometer norm = {:.3f} m/s² (expected ~9.81)", acc_norm);
+        spdlog::error("[Estimator] Sensor may be moving or miscalibrated. Initialization failed.");
+        return false;
+    }
+    
+    // 7. Initialize gravity vector (measured acceleration = -gravity in sensor frame)
+    Eigen::Vector3f gravity_measured = -mean_acc.normalized() * 9.81f;
+    
+    // 8. Set initial gravity (not yet aligned)
+    m_current_state.m_gravity = gravity_measured;
+    
+    // 9. Initialize rotation to identity (will be aligned after)
+    m_current_state.m_rotation = Eigen::Matrix3f::Identity();
+    
+    spdlog::info("[Estimator] Initial gravity (sensor frame): [{:.3f}, {:.3f}, {:.3f}]", 
+                 gravity_measured.x(), gravity_measured.y(), gravity_measured.z());
+    
+    // 10. Gravity alignment: align world frame so gravity points to [0, 0, -9.81]
+    // This rotates all states to make gravity vertical
+    Eigen::Vector3f gravity_target(0.0f, 0.0f, -9.81f);
+    Eigen::Quaternionf q_align = Eigen::Quaternionf::FromTwoVectors(
+        m_current_state.m_gravity.normalized(),
+        gravity_target.normalized()
+    );
+    Eigen::Matrix3f R_align = q_align.toRotationMatrix();
+    
+   
+    
+    // Apply alignment rotation to all states
+    m_current_state.m_rotation = R_align * m_current_state.m_rotation;  // Rotate orientation
+    m_current_state.m_position = R_align * m_current_state.m_position;  // Rotate position (zero)
+    m_current_state.m_velocity = R_align * m_current_state.m_velocity;  // Rotate velocity (zero)
+    m_current_state.m_gravity = R_align * m_current_state.m_gravity;    // Rotate gravity -> [0,0,-9.81]
+    
+  
+    // 11. Initialize gyroscope bias (stationary gyro reading = bias)
+    m_current_state.m_gyro_bias = mean_gyr;
+    
+    // 12. Initialize accelerometer bias from stationary measurements
+    // Stationary condition: acc_measured = -g + bias
+    // After gravity alignment: mean_acc ≈ -R_align^T * g_world + bias
+    // Therefore: bias = mean_acc + R_align^T * g_world
+    //                 = mean_acc + R_align^T * [0, 0, -9.81]
+    Eigen::Vector3f g_aligned(0.0f, 0.0f, -9.81f);
+
+    // Correct formula: bias = mean_acc + R^T * g
+    Eigen::Vector3f acc_bias_estimate = mean_acc + m_current_state.m_rotation.transpose() * g_aligned;
+    m_current_state.m_acc_bias = acc_bias_estimate;
+    
+    spdlog::info("  Acc bias: [{:.4f}, {:.4f}, {:.4f}] m/s²",
+                 acc_bias_estimate.x(), acc_bias_estimate.y(), acc_bias_estimate.z());
+    
+    // 13. Initialize position and velocity to zero
+    m_current_state.m_position.setZero();
+    m_current_state.m_velocity.setZero();
+    
+    // 14. Initialize covariance with appropriate uncertainty
+    m_current_state.m_covariance = Eigen::Matrix<float, 18, 18>::Identity();
+    m_current_state.m_covariance.block<3,3>(0,0) *= 0.01f;   // rotation (small, well aligned)
+    m_current_state.m_covariance.block<3,3>(3,3) *= 1.0f;    // position (unknown)
+    m_current_state.m_covariance.block<3,3>(6,6) *= 0.1f;    // velocity (should be zero)
+    m_current_state.m_covariance.block<3,3>(9,9) *= 0.001f;  // gyro bias (estimated from data)
+    m_current_state.m_covariance.block<3,3>(12,12) *= 0.01f; // acc bias (estimated from data)
+    m_current_state.m_covariance.block<3,3>(15,15) *= 0.001f; // gravity (well aligned)
+    
+    // 15. Set timestamp
+    m_last_update_time = imu_buffer.back().timestamp;
+    
+    // 16. Mark as initialized
+    m_initialized = true;
+    
+    spdlog::info("[Estimator] ═══════════════════════════════════════════════════════");
+    spdlog::info("[Estimator] Gravity initialization SUCCESSFUL at t={:.6f}", m_last_update_time);
+    spdlog::info("[Estimator] Statistics:");
+    spdlog::info("  - IMU samples: {}", imu_buffer.size());
+    spdlog::info("  - Acc variance: {:.6f} m²/s⁴", acc_variance);
+    spdlog::info("  - Gyr variance: {:.6f} rad²/s²", gyr_variance);
+    spdlog::info("  - Acc norm: {:.3f} m/s² (expected: 9.81)", acc_norm);
+    spdlog::info("[Estimator] ═══════════════════════════════════════════════════════");
+    
+    return true;
+}
+
 void Estimator::Initialize(const IMUData& first_imu) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     
     if (m_initialized) {
-        std::cerr << "[Estimator] Already initialized!" << std::endl;
+        spdlog::warn("[Estimator] Already initialized!");
         return;
     }
+    
+    spdlog::warn("[Estimator] Simple initialization with single IMU sample");
+    spdlog::warn("[Estimator] Consider using GravityInitialization() with multiple samples for better accuracy");
     
     // Initialize state with first IMU measurement
     m_current_state.Reset();
     
     // Initial gravity alignment (assume stationary)
-    // Gravity points downward in world frame: [0, 0, -9.81]
-    Eigen::Vector3d acc_world = first_imu.acc;
-    double acc_norm = acc_world.norm();
+    Eigen::Vector3f acc_world = first_imu.acc;
+    float acc_norm = acc_world.norm();
     
-    if (std::abs(acc_norm - 9.81) < 1.0) {
+    if (std::abs(acc_norm - 9.81f) < 1.0f) {
         // Use accelerometer to initialize gravity direction
-        m_current_state.m_gravity = -acc_world.normalized() * 9.81;
+        m_current_state.m_gravity = -acc_world.normalized() * 9.81f;
         
-        // Initialize rotation to align with gravity
-        // For now, assume level initial pose (can be improved)
-        m_current_state.m_rotation = Eigen::Matrix3d::Identity();
+        // Gravity alignment: rotate world frame so gravity points to [0, 0, -9.81]
+        Eigen::Vector3f gravity_target(0.0f, 0.0f, -9.81f);
+        Eigen::Quaternionf q_align = Eigen::Quaternionf::FromTwoVectors(
+            m_current_state.m_gravity.normalized(),
+            gravity_target.normalized()
+        );
+        Eigen::Matrix3f R_align = q_align.toRotationMatrix();
         
-        std::cout << "[Estimator] Gravity initialized: " 
-                  << m_current_state.m_gravity.transpose() << std::endl;
+        // Apply alignment to initial rotation
+        m_current_state.m_rotation = R_align;
+        m_current_state.m_gravity = gravity_target;
+        
+        spdlog::info("[Estimator] Gravity initialized: [{:.3f}, {:.3f}, {:.3f}]",
+                     m_current_state.m_gravity.x(), 
+                     m_current_state.m_gravity.y(), 
+                     m_current_state.m_gravity.z());
     } else {
-        std::cerr << "[Estimator] Warning: Accelerometer norm = " << acc_norm 
-                  << " (expected ~9.81). Using default gravity." << std::endl;
-        m_current_state.m_gravity = Eigen::Vector3d(0, 0, -9.81);
+        spdlog::warn("[Estimator] Accelerometer norm = {:.3f} (expected ~9.81). Using default gravity.", acc_norm);
+        m_current_state.m_gravity = Eigen::Vector3f(0.0f, 0.0f, -9.81f);
+        m_current_state.m_rotation = Eigen::Matrix3f::Identity();
     }
     
     // Initialize biases to zero (will be estimated)
@@ -135,83 +275,88 @@ void Estimator::Initialize(const IMUData& first_imu) {
     m_current_state.m_velocity.setZero();
     
     // Initialize covariance with large uncertainty
-    m_current_state.m_covariance = Eigen::Matrix<double, 18, 18>::Identity();
-    m_current_state.m_covariance.block<3,3>(0,0) *= 0.1;    // rotation
-    m_current_state.m_covariance.block<3,3>(3,3) *= 1.0;    // position
-    m_current_state.m_covariance.block<3,3>(6,6) *= 0.5;    // velocity
-    m_current_state.m_covariance.block<3,3>(9,9) *= 0.01;   // gyro bias
-    m_current_state.m_covariance.block<3,3>(12,12) *= 0.1;  // acc bias
-    m_current_state.m_covariance.block<3,3>(15,15) *= 0.01; // gravity
+    m_current_state.m_covariance = Eigen::Matrix<float, 18, 18>::Identity();
+    m_current_state.m_covariance.block<3,3>(0,0) *= 0.1f;    // rotation
+    m_current_state.m_covariance.block<3,3>(3,3) *= 1.0f;    // position
+    m_current_state.m_covariance.block<3,3>(6,6) *= 0.5f;    // velocity
+    m_current_state.m_covariance.block<3,3>(9,9) *= 0.01f;   // gyro bias
+    m_current_state.m_covariance.block<3,3>(12,12) *= 0.1f;  // acc bias
+    m_current_state.m_covariance.block<3,3>(15,15) *= 0.01f; // gravity
     
-    // Add first IMU to buffer
-    m_imu_buffer.push_back(first_imu);
     m_last_update_time = first_imu.timestamp;
     
     m_initialized = true;
-    std::cout << "[Estimator] Initialization complete at t=" << first_imu.timestamp << std::endl;
+    spdlog::info("[Estimator] Initialization complete at t={:.6f}", first_imu.timestamp);
 }
 
 // ============================================================================
 // IMU Processing (Forward Propagation)
 // ============================================================================
 
-void Estimator::ProcessIMU(const IMUData& imu) {
+void Estimator::ProcessIMU(const IMUData& imu_data) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    
     if (!m_initialized) {
-        std::cerr << "[Estimator] Not initialized! Call Initialize() first." << std::endl;
+        spdlog::warn("[Estimator] Not initialized. Call Initialize() first.");
         return;
     }
     
-    std::lock_guard<std::mutex> lock(m_state_mutex);
+    // Propagate state using current IMU measurement
+    PropagateState(imu_data);
     
-    // Add to buffer
-    m_imu_buffer.push_back(imu);
+    // Save state history for undistortion (keep last 0.5 seconds)
+    // This is more efficient than keeping raw IMU data
+    StateWithTimestamp state_snapshot;
+    state_snapshot.state = m_current_state;
+    state_snapshot.timestamp = imu_data.timestamp;
+    m_state_history.push_back(state_snapshot);
     
-    // Maintain buffer size
-    while (m_imu_buffer.size() > static_cast<size_t>(m_params.imu_buffer_size)) {
-        m_imu_buffer.pop_front();
+    // Clean old states (keep only recent 0.5 seconds for undistortion)
+    while (!m_state_history.empty() && 
+           imu_data.timestamp - m_state_history.front().timestamp > 0.5) {
+        m_state_history.pop_front();
     }
-    
-    // Propagate state
-    PropagateState(imu);
 }
 
 void Estimator::PropagateState(const IMUData& imu) {
-    // Time step
+    // Time step (only timestamp is double)
     double dt = imu.timestamp - m_last_update_time;
     if (dt <= 0.0 || dt > 1.0) {
-        std::cerr << "[Estimator] Invalid dt: " << dt << std::endl;
+        spdlog::error("[Estimator] Invalid dt: {:.6f}", dt);
         return;
     }
+    float dt_f = static_cast<float>(dt);
     
-    // Get current state
-    Eigen::Matrix3d R = m_current_state.m_rotation;
-    Eigen::Vector3d p = m_current_state.m_position;
-    Eigen::Vector3d v = m_current_state.m_velocity;
-    Eigen::Vector3d bg = m_current_state.m_gyro_bias;
-    Eigen::Vector3d ba = m_current_state.m_acc_bias;
-    Eigen::Vector3d g = m_current_state.m_gravity;
+    // Get current state (all float)
+    Eigen::Matrix3f R = m_current_state.m_rotation;
+    Eigen::Vector3f p = m_current_state.m_position;
+    Eigen::Vector3f v = m_current_state.m_velocity;
+    Eigen::Vector3f bg = m_current_state.m_gyro_bias;
+    Eigen::Vector3f ba = m_current_state.m_acc_bias;
+    Eigen::Vector3f g = m_current_state.m_gravity;
     
-    // Corrected measurements
-    Eigen::Vector3d omega = imu.gyr - bg;  // angular velocity
-    Eigen::Vector3d acc = imu.acc - ba;    // linear acceleration
+    // Corrected measurements (already float from IMUData)
+    Eigen::Vector3f omega = imu.gyr - bg;  // angular velocity
+    Eigen::Vector3f acc = imu.acc - ba;    // linear acceleration
+
+    Eigen::Vector3f acc_world = R * acc + g;
     
     // --- Forward Propagation (Euler integration) ---
     // dR/dt = R * [omega]_x  =>  R(t+dt) = R(t) * Exp(omega * dt)
-    Eigen::Vector3f omega_f = (omega * dt).cast<float>();
-    Eigen::Matrix3f R_delta_f = SO3::Exp(omega_f).Matrix();
-    Eigen::Matrix3d R_delta = R_delta_f.cast<double>();
-    Eigen::Matrix3d R_new = R * R_delta;
+    Eigen::Vector3f omega_dt = omega * dt_f;
+    Eigen::Matrix3f R_delta = SO3::Exp(omega_dt).Matrix();
+    Eigen::Matrix3f R_new = R * R_delta;
     
     // dv/dt = R * acc + g  =>  v(t+dt) = v(t) + (R * acc + g) * dt
-    Eigen::Vector3d v_new = v + (R * acc + g) * dt;
+    Eigen::Vector3f v_new = v + (R * acc + g) * dt_f;
     
     // dp/dt = v  =>  p(t+dt) = p(t) + v * dt + 0.5 * (R * acc + g) * dt²
-    Eigen::Vector3d p_new = p + v * dt + 0.5 * (R * acc + g) * dt * dt;
+    Eigen::Vector3f p_new = p + v * dt_f + 0.5f * (R * acc + g) * dt_f * dt_f;
     
     // Biases: random walk (no change in mean)
-    Eigen::Vector3d bg_new = bg;
-    Eigen::Vector3d ba_new = ba;
-    Eigen::Vector3d g_new = g;
+    Eigen::Vector3f bg_new = bg;
+    Eigen::Vector3f ba_new = ba;
+    Eigen::Vector3f g_new = g;
     
     // --- Covariance Propagation ---
     // P(t+dt) = F * P(t) * F^T + Q * dt
@@ -222,27 +367,25 @@ void Estimator::PropagateState(const IMUData& imu) {
     m_state_transition.setIdentity();
     
     // dR depends on omega (rotation dynamics)
-    Eigen::Vector3f omega_skew_f = omega.cast<float>();
-    Eigen::Matrix3d omega_skew = Hat(omega_skew_f).cast<double>();
-    m_state_transition.block<3,3>(0,0) = Eigen::Matrix3d::Identity() - omega_skew * dt;
-    m_state_transition.block<3,3>(0,9) = -R * dt;  // rotation vs gyro bias
+    Eigen::Matrix3f omega_skew = Hat(omega);
+    m_state_transition.block<3,3>(0,0) = Eigen::Matrix3f::Identity() - omega_skew * dt_f;
+    m_state_transition.block<3,3>(0,9) = -R * dt_f;  // rotation vs gyro bias
     
     // dv depends on R and acc (velocity dynamics)
-    Eigen::Vector3f acc_skew_f = acc.cast<float>();
-    Eigen::Matrix3d acc_skew = Hat(acc_skew_f).cast<double>();
-    m_state_transition.block<3,3>(6,0) = -R * acc_skew * dt;  // velocity vs rotation
-    m_state_transition.block<3,3>(6,6) = Eigen::Matrix3d::Identity();
-    m_state_transition.block<3,3>(6,12) = -R * dt;  // velocity vs acc bias
-    m_state_transition.block<3,3>(6,15) = Eigen::Matrix3d::Identity() * dt;  // velocity vs gravity
+    Eigen::Matrix3f acc_skew = Hat(acc);
+    m_state_transition.block<3,3>(6,0) = -R * acc_skew * dt_f;  // velocity vs rotation
+    m_state_transition.block<3,3>(6,6) = Eigen::Matrix3f::Identity();
+    m_state_transition.block<3,3>(6,12) = -R * dt_f;  // velocity vs acc bias
+    m_state_transition.block<3,3>(6,15) = Eigen::Matrix3f::Identity() * dt_f;  // velocity vs gravity
     
     // dp depends on v (position dynamics)
-    m_state_transition.block<3,3>(3,3) = Eigen::Matrix3d::Identity();
-    m_state_transition.block<3,3>(3,6) = Eigen::Matrix3d::Identity() * dt;  // position vs velocity
+    m_state_transition.block<3,3>(3,3) = Eigen::Matrix3f::Identity();
+    m_state_transition.block<3,3>(3,6) = Eigen::Matrix3f::Identity() * dt_f;  // position vs velocity
     
     // Propagate covariance
-    Eigen::Matrix<double, 18, 18> P = m_current_state.m_covariance;
+    Eigen::Matrix<float, 18, 18> P = m_current_state.m_covariance;
     m_current_state.m_covariance = m_state_transition * P * m_state_transition.transpose() 
-                                   + m_process_noise * dt;
+                                   + m_process_noise * dt_f;
     
     // Update state
     m_current_state.m_rotation = R_new;
@@ -261,7 +404,7 @@ void Estimator::PropagateState(const IMUData& imu) {
 
 void Estimator::ProcessLidar(const LidarData& lidar) {
     if (!m_initialized) {
-        std::cerr << "[Estimator] Not initialized! Cannot process LiDAR." << std::endl;
+        spdlog::error("[Estimator] Not initialized! Cannot process LiDAR.");
         return;
     }
     
@@ -272,7 +415,7 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     
     // First frame: initialize map
     if (m_first_lidar_frame) {
-        std::cout << "[Estimator] First LiDAR frame - initializing map" << std::endl;
+        spdlog::info("[Estimator] First LiDAR frame - initializing map");
         UpdateLocalMap(lidar.cloud);
         m_first_lidar_frame = false;
         m_last_lidar_time = lidar.timestamp;
@@ -282,9 +425,9 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     }
     
     // Motion check: skip if not enough motion
-    double distance = (m_current_state.m_position - m_last_lidar_state.m_position).norm();
+    float distance = (m_current_state.m_position - m_last_lidar_state.m_position).norm();
     if (distance < m_params.min_motion_threshold) {
-        std::cout << "[Estimator] Skipping frame (insufficient motion: " << distance << " m)" << std::endl;
+        spdlog::info("[Estimator] Skipping frame (insufficient motion: {:.3f} m)", distance);
         return;
     }
     
@@ -332,8 +475,7 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     m_last_lidar_state = m_current_state;
     m_frame_count++;
     
-    std::cout << "[Estimator] Frame " << m_frame_count 
-              << " processed in " << processing_time << " ms" << std::endl;
+    spdlog::info("[Estimator] Frame {} processed in {:.2f} ms", m_frame_count, processing_time);
 }
 
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
@@ -346,16 +488,16 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     // 6. Kalman update: K = P*H^T*(H*P*H^T + R)^-1, x = x + K*r
     // 7. Iterate 4-5 times
     
-    std::cout << "[Estimator] LiDAR update (TODO: implement Iterated Kalman)" << std::endl;
+    spdlog::info("[Estimator] LiDAR update (TODO: implement Iterated Kalman)");
 }
 
 // ============================================================================
 // Correspondence Finding
 // ============================================================================
 
-std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> 
+std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>> 
 Estimator::FindCorrespondences(const PointCloudPtr scan) {
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> correspondences;
+    std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>> correspondences;
     
     // TODO: Implement correspondence search
     // 1. Build KdTree from map
@@ -374,31 +516,30 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
 
 void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     // Transform scan to world frame
-    Eigen::Matrix3d R = m_current_state.m_rotation;
-    Eigen::Vector3d t = m_current_state.m_position;
+    Eigen::Matrix3f R = m_current_state.m_rotation;
+    Eigen::Vector3f t = m_current_state.m_position;
     
     int added_count = 0;
     for (const auto& pt : *scan) {
         // LiDAR point in sensor frame
-        Eigen::Vector3d p_lidar(pt.x, pt.y, pt.z);
+        Eigen::Vector3f p_lidar(pt.x, pt.y, pt.z);
         
         // Transform: p_world = R_wb * (R_il * p_lidar + t_il) + t_wb
-        Eigen::Vector3d p_imu = Extrinsics::R_il * p_lidar + Extrinsics::t_il;
-        Eigen::Vector3d p_world = R * p_imu + t;
+        Eigen::Vector3f p_imu = Extrinsics::R_il * p_lidar + Extrinsics::t_il;
+        Eigen::Vector3f p_world = R * p_imu + t;
         
         // Add to map cloud
         Point3D map_pt;
-        map_pt.x = static_cast<float>(p_world.x());
-        map_pt.y = static_cast<float>(p_world.y());
-        map_pt.z = static_cast<float>(p_world.z());
+        map_pt.x = p_world.x();
+        map_pt.y = p_world.y();
+        map_pt.z = p_world.z();
         map_pt.intensity = pt.intensity;
         map_pt.offset_time = pt.offset_time;
         m_map_cloud->push_back(map_pt);
         added_count++;
     }
     
-    std::cout << "[Estimator] Map updated: " << m_map_cloud->size() 
-              << " points (added " << added_count << ")" << std::endl;
+    spdlog::info("[Estimator] Map updated: {} points (added {})", m_map_cloud->size(), added_count);
 }
 
 void Estimator::CleanLocalMap() {
@@ -422,7 +563,7 @@ void Estimator::CleanLocalMap() {
         }
         
         m_map_cloud = new_cloud;
-        std::cout << "[Estimator] Map cleaned: " << m_map_cloud->size() << " points" << std::endl;
+        spdlog::info("[Estimator] Map cleaned: {} points", m_map_cloud->size());
     }
 }
 
@@ -431,9 +572,9 @@ void Estimator::CleanLocalMap() {
 // ============================================================================
 
 void Estimator::ComputeLidarJacobians(
-    const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& correspondences,
-    Eigen::MatrixXd& H,
-    Eigen::VectorXd& residual) 
+    const std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>>& correspondences,
+    Eigen::MatrixXf& H,
+    Eigen::VectorXf& residual) 
 {
     // TODO: Implement Jacobian computation
     // For each correspondence (point, plane_normal):
@@ -460,7 +601,7 @@ void Estimator::UpdateProcessNoise(double dt) {
 
 void Estimator::UpdateMeasurementNoise(int num_correspondences) {
     // Measurement noise R is diagonal (independent residuals)
-    m_measurement_noise = Eigen::MatrixXd::Identity(num_correspondences, num_correspondences);
+    m_measurement_noise = Eigen::MatrixXf::Identity(num_correspondences, num_correspondences);
     m_measurement_noise *= m_params.lidar_noise_std * m_params.lidar_noise_std;
 }
 

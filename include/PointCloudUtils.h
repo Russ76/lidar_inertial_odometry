@@ -315,21 +315,6 @@ using PointCloudConstPtr = PointCloud::ConstPtr;
 // ===== Utility Functions =====
 
 /**
- * @brief Load KITTI binary point cloud file
- * @param filename Path to .bin file
- * @return Pointer to loaded point cloud
- */
-PointCloud::Ptr LoadKittiBinary(const std::string& filename);
-
-/**
- * @brief Save point cloud to KITTI binary format
- * @param cloud Point cloud to save
- * @param filename Output file path
- * @return True if successful
- */
-bool SaveKittiBinary(const PointCloud::ConstPtr& cloud, const std::string& filename);
-
-/**
  * @brief Transform point cloud with transformation matrix
  * @param input Input point cloud
  * @param output Output point cloud
@@ -347,7 +332,7 @@ void TransformPointCloud(const PointCloud::ConstPtr& input,
 void CopyPointCloud(const PointCloud::ConstPtr& input, PointCloud::Ptr& output);
 
 /**
- * @brief Save point cloud to PLY binary format
+ * @brief Save point cloud to PLY format
  * @param filename Output file path
  * @param cloud Point cloud to save
  * @return True if successful

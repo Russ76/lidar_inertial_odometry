@@ -61,14 +61,14 @@ public:
     
     // ===== State Variables (public for direct access) =====
     
-    Eigen::Matrix3d m_rotation;        ///< SO(3) rotation matrix
-    Eigen::Vector3d m_position;        ///< Position in world frame (m)
-    Eigen::Vector3d m_velocity;        ///< Velocity in world frame (m/s)
-    Eigen::Vector3d m_gyro_bias;       ///< Gyroscope bias (rad/s)
-    Eigen::Vector3d m_acc_bias;        ///< Accelerometer bias (m/s²)
-    Eigen::Vector3d m_gravity;         ///< Gravity vector (m/s²)
+    Eigen::Matrix3f m_rotation;        ///< SO(3) rotation matrix
+    Eigen::Vector3f m_position;        ///< Position in world frame (m)
+    Eigen::Vector3f m_velocity;        ///< Velocity in world frame (m/s)
+    Eigen::Vector3f m_gyro_bias;       ///< Gyroscope bias (rad/s)
+    Eigen::Vector3f m_acc_bias;        ///< Accelerometer bias (m/s²)
+    Eigen::Vector3f m_gravity;         ///< Gravity vector (m/s²)
     
-    Eigen::Matrix<double, 18, 18> m_covariance;  ///< State covariance matrix
+    Eigen::Matrix<float, 18, 18> m_covariance;  ///< State covariance matrix
     
     // ===== Operators =====
     
@@ -77,14 +77,14 @@ public:
      * @param delta State increment (18x1 vector)
      * @return New state after applying delta
      */
-    State operator+(const Eigen::Matrix<double, 18, 1>& delta) const;
+    State operator+(const Eigen::Matrix<float, 18, 1>& delta) const;
     
     /**
      * @brief Subtraction operator: state - other_state
      * @param other Other state
      * @return State difference (18x1 vector)
      */
-    Eigen::Matrix<double, 18, 1> operator-(const State& other) const;
+    Eigen::Matrix<float, 18, 1> operator-(const State& other) const;
     
     /**
      * @brief Assignment operator
@@ -94,7 +94,7 @@ public:
     /**
      * @brief In-place addition operator
      */
-    State& operator+=(const Eigen::Matrix<double, 18, 1>& delta);
+    State& operator+=(const Eigen::Matrix<float, 18, 1>& delta);
     
     // ===== Utility Functions =====
     
@@ -119,13 +119,13 @@ public:
      * @brief Get state as vector representation
      * @return 18x1 state vector
      */
-    Eigen::Matrix<double, 18, 1> ToVector() const;
+    Eigen::Matrix<float, 18, 1> ToVector() const;
     
     /**
      * @brief Set state from vector representation
      * @param state_vector 18x1 state vector
      */
-    void FromVector(const Eigen::Matrix<double, 18, 1>& state_vector);
+    void FromVector(const Eigen::Matrix<float, 18, 1>& state_vector);
     
     /**
      * @brief Print state for debugging

@@ -11,75 +11,11 @@
  */
 
 #include "PointCloudUtils.h"
-#include <iostream>
+#include <spdlog/spdlog.h>
 
 namespace lio {
 
 // ===== Utility Functions =====
-
-PointCloud::Ptr LoadKittiBinary(const std::string& filename) {
-    auto cloud = std::make_shared<PointCloud>();
-    
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open KITTI binary file: " << filename << std::endl;
-        return cloud;
-    }
-    
-    // Get file size
-    file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    
-    // Each point is 4 floats (x, y, z, intensity)
-    size_t num_points = file_size / (4 * sizeof(float));
-    cloud->reserve(num_points);
-    
-    // Read points
-    for (size_t i = 0; i < num_points; ++i) {
-        float x, y, z, intensity;
-        file.read(reinterpret_cast<char*>(&x), sizeof(float));
-        file.read(reinterpret_cast<char*>(&y), sizeof(float));
-        file.read(reinterpret_cast<char*>(&z), sizeof(float));
-        file.read(reinterpret_cast<char*>(&intensity), sizeof(float));
-        
-        cloud->push_back(x, y, z);
-    }
-    
-    file.close();
-    std::cout << "Loaded " << cloud->size() << " points from " << filename << std::endl;
-    return cloud;
-}
-
-bool SaveKittiBinary(const PointCloud::ConstPtr& cloud, const std::string& filename) {
-    if (!cloud || cloud->empty()) {
-        std::cerr << "Cannot save empty point cloud" << std::endl;
-        return false;
-    }
-    
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file for writing: " << filename << std::endl;
-        return false;
-    }
-    
-    // Write points with intensity = 0
-    for (const auto& point : *cloud) {
-        float x = point.x;
-        float y = point.y;
-        float z = point.z;
-        float intensity = 0.0f;
-        
-        file.write(reinterpret_cast<const char*>(&x), sizeof(float));
-        file.write(reinterpret_cast<const char*>(&y), sizeof(float));
-        file.write(reinterpret_cast<const char*>(&z), sizeof(float));
-        file.write(reinterpret_cast<const char*>(&intensity), sizeof(float));
-    }
-    
-    file.close();
-    std::cout << "Saved " << cloud->size() << " points to " << filename << std::endl;
-    return true;
-}
 
 void TransformPointCloud(const PointCloud::ConstPtr& input,
                         PointCloud::Ptr& output,
@@ -103,13 +39,13 @@ void CopyPointCloud(const PointCloud::ConstPtr& input, PointCloud::Ptr& output) 
 
 bool SavePointCloudPly(const std::string& filename, const PointCloud::ConstPtr& cloud) {
     if (!cloud || cloud->empty()) {
-        std::cerr << "Cannot save empty point cloud" << std::endl;
+        spdlog::error("Cannot save empty point cloud");
         return false;
     }
     
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "Failed to open PLY file for writing: " << filename << std::endl;
+        spdlog::error("Failed to open PLY file for writing: {}", filename);
         return false;
     }
     
@@ -128,7 +64,7 @@ bool SavePointCloudPly(const std::string& filename, const PointCloud::ConstPtr& 
     }
     
     file.close();
-    std::cout << "Saved " << cloud->size() << " points to PLY: " << filename << std::endl;
+    spdlog::info("Saved {} points to PLY: {}", cloud->size(), filename);
     return true;
 }
 

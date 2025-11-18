@@ -11,6 +11,7 @@
  */
 
 #include "LIOViewer.h"
+#include "Estimator.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -22,15 +23,6 @@
 #include <spdlog/spdlog.h>
 
 namespace lio {
-
-/**
- * @brief IMU measurement data
- */
-struct IMUData {
-    double timestamp;
-    float gyro_x, gyro_y, gyro_z;
-    float acc_x, acc_y, acc_z;
-};
 
 /**
  * @brief LiDAR scan data
@@ -171,15 +163,14 @@ bool LoadIMUData(const std::string& csv_path, std::vector<IMUData>& imu_data) {
         }
         
         if (values.size() == 7) {
-            IMUData imu;
-            imu.timestamp = values[0];
-            imu.gyro_x = static_cast<float>(values[1]);
-            imu.gyro_y = static_cast<float>(values[2]);
-            imu.gyro_z = static_cast<float>(values[3]);
-            imu.acc_x = static_cast<float>(values[4]);
-            imu.acc_y = static_cast<float>(values[5]);
-            imu.acc_z = static_cast<float>(values[6]);
-            imu_data.push_back(imu);
+            double timestamp = values[0];
+            Eigen::Vector3f gyr(static_cast<float>(values[1]),
+                               static_cast<float>(values[2]),
+                               static_cast<float>(values[3]));
+            Eigen::Vector3f acc(static_cast<float>(values[4]),
+                               static_cast<float>(values[5]),
+                               static_cast<float>(values[6]));
+            imu_data.emplace_back(timestamp, acc, gyr);
         }
         
         line_count++;
@@ -382,13 +373,48 @@ int main(int argc, char** argv) {
     
     spdlog::info("Viewer initialized successfully!");
     spdlog::info("");
-    spdlog::info("Starting playback...");
+    
+    // Initialize Estimator with gravity initialization
+    spdlog::info("Initializing LIO Estimator...");
+    lio::Estimator estimator;
+    
+    // Collect first 100 IMU samples for gravity initialization (about 0.5 seconds @ 200Hz)
+    std::vector<lio::IMUData> init_imu_buffer;
+    int init_samples = std::min(100, static_cast<int>(imu_data.size()));
+    
+    for (int i = 0; i < init_samples; ++i) {
+        const auto& imu = imu_data[i];
+        // IMUData already has Vector3f members, just copy directly
+        init_imu_buffer.push_back(imu);
+    }
+    
+    // Perform gravity initialization
+    if (!estimator.GravityInitialization(init_imu_buffer)) {
+        spdlog::error("Failed to initialize estimator with gravity alignment");
+        return 1;
+    }
+    
+    spdlog::info("Estimator initialized successfully!");
+    spdlog::info("");
+    
+    // Skip events before gravity initialization timestamp
+    double init_end_time = init_imu_buffer.back().timestamp;
+    size_t start_event_idx = 0;
+    for (size_t i = 0; i < events.size(); ++i) {
+        if (events[i].timestamp > init_end_time) {
+            start_event_idx = i;
+            break;
+        }
+    }
+    
+    spdlog::info("Skipping first {} events (before gravity initialization)", start_event_idx);
+    spdlog::info("Starting playback from t={:.3f}s...", events[start_event_idx].timestamp - events[0].timestamp);
     spdlog::info("Close viewer window to quit");
     spdlog::info("");
     
     // Playback parameters
     double playback_speed = 5.0;  // 5x speed for faster playback
-    double start_time = events.front().timestamp;
+    double start_time = events[start_event_idx].timestamp;
     
     // Current state
     Eigen::Matrix4f current_pose = Eigen::Matrix4f::Identity();
@@ -398,7 +424,7 @@ int main(int argc, char** argv) {
     // Playback loop
     auto playback_start = std::chrono::steady_clock::now();
     
-    for (size_t event_idx = 0; event_idx < events.size() && !viewer.ShouldClose(); ++event_idx) {
+    for (size_t event_idx = start_event_idx; event_idx < events.size() && !viewer.ShouldClose(); ++event_idx) {
         const auto& event = events[event_idx];
         
         // Calculate target playback time
@@ -418,15 +444,27 @@ int main(int argc, char** argv) {
             // Process IMU data
             const auto& imu = imu_data[event.data_index];
             
-            // Convert to IMU plot data
+            // Process with estimator
+            estimator.ProcessIMU(imu);
+            
+            // Get current state to extract biases and gravity
+            lio::State state = estimator.GetCurrentState();
+            
+            // Compute gravity-compensated acceleration (world frame)
+            // acc_world = R * (acc_sensor - bias) + gravity
+            // acc_corrected = R * (acc_sensor - bias)  <- This is what we want to plot
+            Eigen::Vector3f acc_corrected = state.m_rotation * (imu.acc - state.m_acc_bias);
+            Eigen::Vector3f gyr_corrected = imu.gyr - state.m_gyro_bias;
+            
+            // Convert to IMU plot data for viewer (gravity-compensated)
             lio::IMUPlotData plot_data;
             plot_data.timestamp = imu.timestamp;
-            plot_data.gyro_x = imu.gyro_x;
-            plot_data.gyro_y = imu.gyro_y;
-            plot_data.gyro_z = imu.gyro_z;
-            plot_data.acc_x = imu.acc_x;
-            plot_data.acc_y = imu.acc_y;
-            plot_data.acc_z = imu.acc_z;
+            plot_data.gyro_x = gyr_corrected.x();
+            plot_data.gyro_y = gyr_corrected.y();
+            plot_data.gyro_z = gyr_corrected.z();
+            plot_data.acc_x = acc_corrected.x();  // Gravity removed!
+            plot_data.acc_y = acc_corrected.y();
+            plot_data.acc_z = acc_corrected.z();
             
             viewer.AddIMUMeasurement(plot_data);
             
@@ -444,17 +482,28 @@ int main(int argc, char** argv) {
             if (lio::LoadPLYPointCloud(ply_path, cloud)) {
                 lidar_frame_count++;
                 
-                // Update viewer with point cloud
+                // Process with LIO estimator
+                estimator.ProcessLidar(lio::LidarData(lidar.timestamp, cloud));
+                
+                // Get current state from estimator
+                lio::State current_state = estimator.GetCurrentState();
+                
+                // Convert state to pose matrix for visualization
+                Eigen::Matrix4f current_pose = Eigen::Matrix4f::Identity();
+                current_pose.block<3,3>(0,0) = current_state.m_rotation;
+                current_pose.block<3,1>(0,3) = current_state.m_position;
+                
+                // Update viewer with point cloud and pose
                 viewer.UpdatePointCloud(cloud, current_pose);
                 viewer.AddTrajectoryPoint(current_pose);
                 viewer.UpdateStateInfo(lidar_frame_count, cloud->size());
                 
-                spdlog::info("[Frame {:4d}] Loaded LiDAR scan {:06d} with {:5d} points @ {:.3f}s", 
+                spdlog::info("[Frame {:4d}] Loaded LiDAR scan {:06d} with {:5d} points @ {:.3f}s | Pos: [{:.2f}, {:.2f}, {:.2f}]", 
                             lidar_frame_count, lidar.scan_index, cloud->size(), 
-                            event.timestamp - start_time);
-                
-                // TODO: Process with LIO estimator
-                // For now, keep identity pose (no motion)
+                            event.timestamp - start_time,
+                            current_state.m_position.x(),
+                            current_state.m_position.y(),
+                            current_state.m_position.z());
                 
             } else {
                 spdlog::warn("Failed to load LiDAR scan: {}", ply_path);

@@ -25,12 +25,21 @@ namespace lio {
 
 // IMU measurement structure
 struct IMUData {
-    double timestamp;
-    Eigen::Vector3d acc;    // acceleration [m/s²]
-    Eigen::Vector3d gyr;    // angular velocity [rad/s]
+    double timestamp;           // Keep double for timestamp precision
+    Eigen::Vector3f acc;        // acceleration [m/s²] - float for performance
+    Eigen::Vector3f gyr;        // angular velocity [rad/s] - float for performance
     
-    IMUData(double t, const Eigen::Vector3d& a, const Eigen::Vector3d& g)
+    IMUData(double t, const Eigen::Vector3f& a, const Eigen::Vector3f& g)
         : timestamp(t), acc(a), gyr(g) {}
+};
+
+// State with timestamp for undistortion
+struct StateWithTimestamp {
+    State state;
+    double timestamp;
+    
+    StateWithTimestamp() : timestamp(0.0) {}
+    StateWithTimestamp(const State& s, double t) : state(s), timestamp(t) {}
 };
 
 // LiDAR scan structure
@@ -70,6 +79,9 @@ public:
     
     /// Initialize estimator with first IMU measurement
     void Initialize(const IMUData& first_imu);
+    
+    /// Initialize gravity direction with multiple IMU samples (FAST-LIO style)
+    bool GravityInitialization(const std::vector<IMUData>& imu_buffer);
     
     /// Process new IMU measurement
     void ProcessIMU(const IMUData& imu);
@@ -133,7 +145,7 @@ private:
     void UpdateWithLidar(const LidarData& lidar);
     
     /// Find point-to-plane correspondences
-    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> 
+    std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>> 
     FindCorrespondences(const PointCloudPtr scan);
     
     /// Update local map with new scan
@@ -147,9 +159,9 @@ private:
                               std::vector<MapPoint>& features);
     
     /// Compute Jacobians for point-to-plane residuals
-    void ComputeLidarJacobians(const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& correspondences,
-                              Eigen::MatrixXd& H,
-                              Eigen::VectorXd& residual);
+    void ComputeLidarJacobians(const std::vector<std::pair<Eigen::Vector3f, Eigen::Vector3f>>& correspondences,
+                              Eigen::MatrixXf& H,
+                              Eigen::VectorXf& residual);
     
     /// Motion undistortion for point cloud
     PointCloudPtr 
@@ -175,8 +187,8 @@ private:
     
     // Data buffers (thread-safe)
     mutable std::mutex m_state_mutex;
-    std::deque<IMUData> m_imu_buffer;
-    std::deque<State> m_trajectory;
+    std::deque<StateWithTimestamp> m_state_history;  // For undistortion (propagated states)
+    std::deque<State> m_trajectory;                  // For trajectory visualization
     
     // Local map storage
     std::vector<MapPoint> m_local_map;
@@ -188,15 +200,15 @@ private:
     Statistics m_statistics;
     std::vector<double> m_processing_times;
     
-    // Kalman filter matrices
-    Eigen::Matrix<double, 18, 18> m_process_noise;      // Q
-    Eigen::MatrixXd m_measurement_noise;                // R (dynamic size)
-    Eigen::Matrix<double, 18, 18> m_state_transition;   // F
+    // Kalman filter matrices (float for performance, timestamp still double)
+    Eigen::Matrix<float, 18, 18> m_process_noise;      // Q
+    Eigen::MatrixXf m_measurement_noise;                // R (dynamic size)
+    Eigen::Matrix<float, 18, 18> m_state_transition;   // F
     
     // Temporary computation storage
-    Eigen::MatrixXd m_jacobian;
-    Eigen::VectorXd m_residual_vector;
-    Eigen::MatrixXd m_kalman_gain;
+    Eigen::MatrixXf m_jacobian;
+    Eigen::VectorXf m_residual_vector;
+    Eigen::MatrixXf m_kalman_gain;
     
     // Configuration
     bool m_first_lidar_frame;

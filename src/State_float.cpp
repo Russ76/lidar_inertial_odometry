@@ -92,7 +92,7 @@ Eigen::Matrix<float, 18, 1> State::operator-(const State& other) const {
     // Rotation difference: log(R_other^T * R_this)
     Eigen::Matrix3f rot_diff = other.m_rotation.transpose() * m_rotation;
     SO3 rot_so3(rot_diff);
-    Eigen::Vector3f log_rot = rot_so3.Log();  // Member function, not static
+    Eigen::Vector3f log_rot = SO3::Log(rot_so3);
     delta.segment<3>(m_rot_idx) = log_rot;
     
     // Other states: simple subtraction
@@ -124,7 +124,7 @@ Eigen::Matrix<float, 18, 1> State::ToVector() const {
     
     // Rotation as log(R)
     SO3 rot_so3(m_rotation);
-    Eigen::Vector3f log_rot = rot_so3.Log();  // Member function, not static
+    Eigen::Vector3f log_rot = SO3::Log(rot_so3);
     vec.segment<3>(m_rot_idx) = log_rot;
     
     // Other states
