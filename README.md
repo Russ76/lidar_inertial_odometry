@@ -16,15 +16,7 @@ Tightly-coupled LiDAR-Inertial Odometry using Iterated Extended Kalman Filter wi
 
 
 
-### Installation (Ubuntu 22.04)
-```bash
-sudo apt update
-sudo apt install cmake libeigen3-dev libglew-dev libyaml-cpp-dev
-```
-
-Pangolin and spdlog are included in `thirdparty/` directory.
-
-## Build
+### Installation (Ubuntu 20.04)
 
 ```bash
 cd lidar_inertial_odometry
@@ -35,11 +27,7 @@ This will:
 1. Build Pangolin from `thirdparty/pangolin`
 2. Build the main project with CMake
 
-## Usage
-
 ### Quick Start
-
-
 
 **Livox AVIA Dataset**:
 - **Download**: [Google Drive Link](https://drive.google.com/file/d/1NPtqg34vdAM-BMdqQ_pfRgVvzVVRuXd6/view?usp=sharing)
