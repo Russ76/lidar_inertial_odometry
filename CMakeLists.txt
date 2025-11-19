@@ -37,6 +37,7 @@ add_library(lio_viewer
     src/core/VoxelMap.cpp
     src/core/State.cpp
     src/core/Estimator.cpp
+    src/core/ProbabilisticKernelOptimizer.cpp
 )
 
 target_link_libraries(lio_viewer

@@ -16,6 +16,7 @@
 #include "State.h"
 #include "PointCloudUtils.h"
 #include "VoxelMap.h"
+#include "ProbabilisticKernelOptimizer.h"
 #include <vector>
 #include <memory>
 #include <deque>
@@ -261,6 +262,9 @@ private:
     Eigen::Vector3f m_last_keyframe_position;
     Eigen::Matrix3f m_last_keyframe_rotation;
     bool m_first_keyframe;
+    
+    // Probabilistic Kernel Optimization
+    std::shared_ptr<ProbabilisticKernelOptimizer> m_pko;
 };
 
 } // namespace lio

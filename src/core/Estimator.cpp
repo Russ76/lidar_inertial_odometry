@@ -16,6 +16,8 @@
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <cmath>
+#include <numeric>
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -66,6 +68,17 @@ Estimator::Estimator()
     m_statistics.total_distance = 0.0;
     m_statistics.avg_translation_error = 0.0;
     m_statistics.avg_rotation_error = 0.0;
+    
+    // Initialize Probabilistic Kernel Optimizer
+    PKOConfig pko_config;
+    pko_config.use_adaptive = true;
+    pko_config.min_scale_factor = 0.01;
+    pko_config.max_scale_factor = 10.0;
+    pko_config.num_alpha_segments = 100;
+    pko_config.truncated_threshold = 10.0;
+    pko_config.gmm_components = 2;
+    pko_config.gmm_sample_size = 100;
+    m_pko = std::make_shared<ProbabilisticKernelOptimizer>(pko_config);
     
     spdlog::info("[Estimator] Initialized with default extrinsics (R3LIVE/Avia dataset)");
     spdlog::info("[Estimator] t_il = [{:.5f}, {:.5f}, {:.5f}]", 
@@ -509,6 +522,11 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
     auto start_total = std::chrono::high_resolution_clock::now();
     
+    // Reset PKO for new scan
+    if (m_pko) {
+        m_pko->Reset();
+    }
+    
     // Nested Iterated Extended Kalman Filter (IEKF)
     // Outer loop: Re-linearization (find new correspondences)
     // Inner loop: Convergence (update state with same correspondences)
@@ -518,6 +536,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     
     double total_corr_time = 0.0;
     int total_inner_iters = 0;
+    double residual_normalization_scale = 1.0;  // For PKO normalization
     
     for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++) {
         // OUTER LOOP: Find correspondences at current state (expensive, ~50ms)
@@ -542,22 +561,65 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             Eigen::MatrixXf H;
             Eigen::VectorXf residual;
             ComputeLidarJacobians(correspondences, H, residual);
+
+            // Calculate residual normalization scale (only once at first iteration)
+            if (outer_iter == 0 && inner_iter == 0 && residual.size() > 0) {
+                std::vector<double> residuals_for_scale;
+                residuals_for_scale.reserve(residual.size());
+                for (int i = 0; i < residual.size(); i++) {
+                    residuals_for_scale.push_back(static_cast<double>(residual(i)));
+                }
+                std::sort(residuals_for_scale.begin(), residuals_for_scale.end());
+                
+                double mean = std::accumulate(residuals_for_scale.begin(), residuals_for_scale.end(), 0.0) / residuals_for_scale.size();
+                double variance = 0.0;
+                for (double val : residuals_for_scale) {
+                    variance += (val - mean) * (val - mean);
+                }
+                variance /= residuals_for_scale.size();
+                double std_dev = std::sqrt(variance);
+                
+                // Calculate residual normalization scale (std / 6)
+                residual_normalization_scale = std_dev / 6.0;
+                
+                // spdlog::info("[PKO] Residual normalization scale (std/6): {:.6f}", residual_normalization_scale);
+            }
+
+            // Calculate adaptive Huber scale using PKO with normalized residuals
+            double adaptive_huber_delta = 1.0;  // Default value
+            if (m_pko) {
+                // Convert residuals from float to double and normalize
+                std::vector<double> residuals_double(residual.size());
+                for (int i = 0; i < residual.size(); i++) {
+                    double normalized_residual = static_cast<double>(residual(i)) / std::max(residual_normalization_scale, 1e-6);
+                    residuals_double[i] = normalized_residual;
+                }
+                
+                // Calculate adaptive scale factor (alpha) using normalized residuals
+                adaptive_huber_delta = m_pko->CalculateScaleFactor(residuals_double);
+                
+                // spdlog::info("[PKO] Outer iter {}, Inner iter {}: alpha = {:.6f}", outer_iter, inner_iter, adaptive_huber_delta);
+            }
+            
+            // Normalize residuals for numerical stability
+            float normalization_scale_f = static_cast<float>(residual_normalization_scale);
+            Eigen::VectorXf normalized_residual = residual / std::max(normalization_scale_f, 1e-6f);
             
             int num_corr = correspondences.size();
             
-            // Compute Huber weights for robustness to outliers
-            const float huber_threshold = 1.0f;  // Huber threshold (meters)
+            // Compute Huber weights using normalized residuals and adaptive delta
+            float huber_threshold = static_cast<float>(adaptive_huber_delta);
             Eigen::VectorXf huber_weights(num_corr);
             
             for (int i = 0; i < num_corr; i++) {
-                float abs_residual = std::abs(residual(i));
+                float abs_normalized_residual = std::abs(normalized_residual(i));
                 
-                if (abs_residual <= huber_threshold) {
+                if (abs_normalized_residual <= huber_threshold) {
                     // L2 region: w = 1
                     huber_weights(i) = 1.0f;
                 } else {
-                    // L1 region: w = threshold / |residual|
-                    huber_weights(i) = huber_threshold / abs_residual;
+                    // L1 region: w = threshold / |normalized_residual|
+                    huber_weights(i) = huber_threshold / abs_normalized_residual;
                 }
             }
             
