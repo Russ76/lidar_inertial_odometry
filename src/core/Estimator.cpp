@@ -846,59 +846,10 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
             is_keyframe = true;
             m_last_keyframe_position = t_wb;
             m_last_keyframe_rotation = R_wb;
-        } else {
-            
-            // Skip map update but still rebuild KdTree and frustum filter
-            auto start_frustum = std::chrono::high_resolution_clock::now();
-            
-            // Apply Frustum Culling to existing map
-            Eigen::Matrix3f R_li = m_params.R_il.transpose();
-            Eigen::Vector3f t_li = -R_li * m_params.t_il;
-            Eigen::Matrix3f R_iw = R_wb.transpose();
-            Eigen::Vector3f t_iw = -R_iw * t_wb;
-            Eigen::Matrix3f R_lw = R_li * R_iw;
-            Eigen::Vector3f t_lw = R_li * t_iw + t_li;
-            
-            auto frustum_filtered_map = std::make_shared<PointCloud>();
-            FrustumFilter frustum_filter;
-            frustum_filter.SetSensorPose(R_lw, t_lw);
-            frustum_filter.SetFOV(static_cast<float>(m_params.frustum_fov_horizontal), 
-                                  static_cast<float>(m_params.frustum_fov_vertical));
-            frustum_filter.SetMaxRange(static_cast<float>(m_params.frustum_max_range));
-            frustum_filter.SetInputCloud(m_map_cloud);
-            frustum_filter.Filter(*frustum_filtered_map);
-            
-            auto end_frustum = std::chrono::high_resolution_clock::now();
-            double frustum_time = std::chrono::duration<double, std::milli>(end_frustum - start_frustum).count();
-            
-            // Apply voxel downsampling
-            auto start_voxel = std::chrono::high_resolution_clock::now();
-            auto downsampled_cloud = std::make_shared<PointCloud>();
-            VoxelGrid voxel_filter;
-            voxel_filter.SetInputCloud(frustum_filtered_map);
-            voxel_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));
-            voxel_filter.Filter(*downsampled_cloud);
-            auto end_voxel = std::chrono::high_resolution_clock::now();
-            double voxel_time = std::chrono::duration<double, std::milli>(end_voxel - start_voxel).count();
-            
-            m_map_cloud = downsampled_cloud;
-            
-            // Rebuild VoxelMap (much faster than KdTree)
-            auto start_voxelmap = std::chrono::high_resolution_clock::now();
-            if (!m_map_cloud->empty()) {
-                m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));  // Use config voxel size
-                m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
-                m_voxel_map->AddPointCloud(m_map_cloud);
-            }
-            auto end_voxelmap = std::chrono::high_resolution_clock::now();
-            double voxelmap_time = std::chrono::duration<double, std::milli>(end_voxelmap - start_voxelmap).count();
-            
-            auto end_total = std::chrono::high_resolution_clock::now();
-            double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
-            
-            return;
         }
     }
+
+    
     
     // ===== Add new scan to map (only for keyframes) =====
     auto start_transform = std::chrono::high_resolution_clock::now();
@@ -938,7 +889,7 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
         m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
         m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
     }
-    m_voxel_map->UpdateVoxelMap(transformed_scan, sensor_position, m_params.voxel_culling_distance);
+    m_voxel_map->UpdateVoxelMap(transformed_scan, sensor_position, m_params.voxel_culling_distance, is_keyframe);
     
     auto end_voxelmap_update = std::chrono::high_resolution_clock::now();
     double voxelmap_update_time = std::chrono::duration<double, std::milli>(end_voxelmap_update - start_voxelmap_update).count();

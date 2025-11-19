@@ -141,7 +141,7 @@ public:
      */
     void UpdateVoxelMap(const PointCloudPtr& new_cloud,
                         const Eigen::Vector3d& sensor_position,
-                        double max_distance);
+                        double max_distance, bool is_keyframe);
     
     /**
      * @brief Get total number of points in the map

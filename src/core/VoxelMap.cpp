@@ -182,7 +182,7 @@ void VoxelMap::Clear() {
 
 void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
                                const Eigen::Vector3d& sensor_position,
-                               double max_distance) {
+                               double max_distance, bool is_keyframe) {
     if (new_cloud->empty()) return;
     
     // Step 1: Mark voxels that are hit by the new scan
@@ -238,7 +238,10 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
     }
     
     // Step 4: Add new points (creates new voxels with hit_count=1, updates centroids)
-    AddPointCloud(new_cloud);
+    if(is_keyframe) 
+    {
+        AddPointCloud(new_cloud);
+    }
 }
 
 std::vector<VoxelKey> VoxelMap::GetOccupiedVoxels() const {
