@@ -56,6 +56,7 @@ Estimator::Estimator()
     
     // Initialize local map
     m_map_cloud = std::make_shared<PointCloud>();
+    m_processed_cloud = std::make_shared<PointCloud>();
     
     // Initialize statistics
     m_statistics = Statistics();
@@ -314,7 +315,6 @@ void Estimator::PropagateState(const IMUData& imu) {
     m_last_update_time = imu.timestamp;
 
     if (dt <= 0.0 || dt > 1.0) {
-        spdlog::error("[Estimator] Invalid dt: {:.6f}", dt);
         return;
     }
     float dt_f = static_cast<float>(dt);
@@ -429,10 +429,11 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     PointCloudPtr range_filtered_scan = std::make_shared<PointCloud>();
     unsigned int initial_size = downsampled_scan->size();
     unsigned int final_size = 0;
+    const float max_range = static_cast<float>(m_params.max_map_distance);
     for(unsigned int i = 0; i < initial_size; ++i) {
         const auto& point = downsampled_scan->at(i);
         float range = std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
-        if (range <= 50.0f) {
+        if (range <= max_range) {
             range_filtered_scan->push_back(point);
             final_size++;
         }
@@ -442,6 +443,9 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     
     // Create LidarData with downsampled cloud for all processing
     LidarData downsampled_lidar(lidar.timestamp, range_filtered_scan);
+    
+    // Store processed cloud for visualization
+    m_processed_cloud = range_filtered_scan;
     
     // First frame: initialize map with downsampled cloud
     if (m_first_lidar_frame) {
@@ -535,7 +539,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     // Nested Iterated Extended Kalman Filter (IEKF)
     // Outer loop: Re-linearization (find new correspondences)
     // Inner loop: Convergence (update state with same correspondences)
-    const int max_outer_iterations = 10;   // Re-linearization iterations
+    const int max_outer_iterations = m_params.max_iterations;  // Re-linearization iterations from config
     const int max_inner_iterations = 4;  // State update iterations per correspondence
     bool converged = false;
     
@@ -568,11 +572,28 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             
             int num_corr = correspondences.size();
             
-            // Compute R_inv for each correspondence
+            // Compute Huber weights for robustness to outliers
+            const float huber_threshold = 1.0f;  // Huber threshold (meters)
+            Eigen::VectorXf huber_weights(num_corr);
+            
+            for (int i = 0; i < num_corr; i++) {
+                float abs_residual = std::abs(residual(i));
+                
+                if (abs_residual <= huber_threshold) {
+                    // L2 region: w = 1
+                    huber_weights(i) = 1.0f;
+                } else {
+                    // L1 region: w = threshold / |residual|
+                    huber_weights(i) = huber_threshold / abs_residual;
+                }
+            }
+            
+            // Compute R_inv with Huber weighting
             Eigen::VectorXf R_inv(num_corr);
             for (int i = 0; i < num_corr; i++) {
                 float sigma = m_params.lidar_noise_std * m_params.lidar_noise_std;
-                R_inv(i) = 1.0f / (0.001f + sigma);
+                // Apply Huber weight to measurement noise inverse
+                R_inv(i) = huber_weights(i) / (0.001f + sigma);
             }
             
             // Compute H^T * R_inv (6 x num_corr)
@@ -615,7 +636,8 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             float pos_norm = dx.segment<3>(3).norm();
             
             // Inner convergence: state change is small
-            if (rot_norm < 0.005f && pos_norm < 0.005f) {
+            float convergence_threshold_f = static_cast<float>(m_params.convergence_threshold);
+            if (rot_norm < convergence_threshold_f && pos_norm < convergence_threshold_f) {
                 inner_converged = true;
                 break;
             }
@@ -665,7 +687,7 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
     Eigen::Vector3f t_wb = m_current_state.m_position;
     
     const int K = 5;  // Number of neighbors for plane fitting
-    const float max_neighbor_distance = 1.0f;  // Maximum distance for neighbors (meters)
+    const float max_neighbor_distance = static_cast<float>(m_params.max_correspondence_distance);  // From config
     const float max_plane_distance = 0.1f;  // Maximum distance from point to fitted plane
     const int max_correspondences = m_params.max_correspondences;  // Maximum number of correspondences to find
     
@@ -797,8 +819,6 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         valid_correspondences++;
     }
 
-    spdlog::info("Num Correspondance: {}", correspondences.size());
-    
     return correspondences;
 }
 

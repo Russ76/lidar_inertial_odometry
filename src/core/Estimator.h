@@ -120,6 +120,12 @@ public:
     /// Get current voxel map for visualization
     std::shared_ptr<VoxelMap> GetVoxelMap() const;
     
+    /// Get processed (downsampled + range filtered) point cloud for visualization
+    PointCloudPtr GetProcessedCloud() const {
+        std::lock_guard<std::mutex> lock(m_map_mutex);
+        return m_processed_cloud;
+    }
+    
     /// Print processing time statistics
     void PrintProcessingTimeStatistics() const;
     
@@ -227,6 +233,7 @@ private:
     // Local map storage
     std::vector<MapPoint> m_local_map;
     PointCloudPtr m_map_cloud;
+    PointCloudPtr m_processed_cloud;  // Processed (downsampled + range filtered) scan for visualization
     std::shared_ptr<VoxelMap> m_voxel_map;  // Voxel hash map for fast neighbor search
     mutable std::mutex m_map_mutex;
     

@@ -580,10 +580,15 @@ int main(int argc, char** argv) {
                 current_pose.block<3,3>(0,0) = current_state.m_rotation;
                 current_pose.block<3,1>(0,3) = current_state.m_position;
                 
-                // Update viewer with point cloud and pose
-                viewer.UpdatePointCloud(cloud, current_pose);
+                // Get processed (downsampled + range filtered) cloud for visualization
+                lio::PointCloudPtr processed_cloud = estimator.GetProcessedCloud();
+                if (processed_cloud && !processed_cloud->empty()) {
+                    viewer.UpdatePointCloud(processed_cloud, current_pose);
+                }
+                
                 viewer.AddTrajectoryPoint(current_pose);
-                viewer.UpdateStateInfo(lidar_frame_count, cloud->size());
+                viewer.UpdateStateInfo(lidar_frame_count, 
+                    processed_cloud ? processed_cloud->size() : 0);
                 
                 // Update map visualization (choose between point cloud or voxel cubes)
                 lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
