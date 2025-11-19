@@ -310,6 +310,9 @@ void Estimator::ProcessIMU(const IMUData& imu_data) {
 void Estimator::PropagateState(const IMUData& imu) {
     // Time step (only timestamp is double)
     double dt = imu.timestamp - m_last_update_time;
+
+    m_last_update_time = imu.timestamp;
+
     if (dt <= 0.0 || dt > 1.0) {
         spdlog::error("[Estimator] Invalid dt: {:.6f}", dt);
         return;
@@ -384,7 +387,6 @@ void Estimator::PropagateState(const IMUData& imu) {
     m_current_state.m_acc_bias = ba_new;
     m_current_state.m_gravity = g_new;
     
-    m_last_update_time = imu.timestamp;
 }
 
 // ============================================================================
