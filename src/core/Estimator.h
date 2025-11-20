@@ -152,6 +152,7 @@ public:
         int max_map_points = 100000;
         double max_map_distance = 50.0;       // m
         int max_voxel_hit_count = 10;         // Maximum hit count for voxel occupancy
+        int voxel_hierarchy_factor = 3;       // L1 voxel factor: L1 = factor × L0 (3, 5, 7, etc.)
         double min_plane_points = 5;
         
         // Frustum culling parameters

@@ -216,6 +216,7 @@ private:
     pangolin::Var<bool> m_show_surfels;                ///< Show L1 surfels checkbox
     pangolin::Var<bool> m_auto_playback;               ///< Auto playback mode
     pangolin::Var<bool> m_step_forward_button;         ///< Step forward button
+    pangolin::Var<bool> m_follow_mode;                 ///< Follow mode (top-down view with zoom support)
     pangolin::Var<int> m_frame_id;                     ///< Current frame ID
     pangolin::Var<int> m_total_points;                 ///< Total points in frame
     
@@ -224,6 +225,9 @@ private:
     float m_trajectory_width;                          ///< Trajectory line width
     float m_coordinate_frame_size;                     ///< Coordinate frame axis length
     float m_coordinate_frame_width;                    ///< Coordinate frame line width
+    
+    // ===== Follow Mode =====
+    Eigen::Vector3f m_camera_target;                   ///< Target position for smooth follow
     
     // ===== Memory Management =====
     static constexpr size_t MAX_TRAJECTORY_POINTS = 10000; ///< Maximum trajectory points

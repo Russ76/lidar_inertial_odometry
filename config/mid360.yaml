@@ -31,12 +31,13 @@ estimator:
   voxel_size: 0.4            # Voxel size in meters for VoxelMap
   max_correspondences: 2000    # Maximum number of correspondences per frame
   max_correspondence_distance: 1.0  # Maximum distance for correspondence matching (meters)
-  max_iterations: 100          # Maximum Gauss-Newton iterations
+  max_iterations: 10          # Maximum Gauss-Newton iterations
   convergence_threshold: 0.001 # Convergence threshold for optimization
   
   # Local map parameters
-  max_distance: 20.0           # Maximum distance to keep map points (meters)
-  max_voxel_hit_count: 3    # Maximum hit count for voxel occupancy (1-N, default: 10)
+  max_distance: 50.0           # Maximum distance to keep map points (meters)
+  max_voxel_hit_count: 10    # Maximum hit count for voxel occupancy (1-N, default: 10)
+  voxel_hierarchy_factor: 3    # L1 voxel factor: L1 = factor × L0 (e.g., 3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7)
   
   # Keyframe parameters
   keyframe_translation_threshold: 1.0   # Translation threshold for keyframe (meters)

@@ -421,7 +421,8 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     // From now on, only states between current and next LiDAR will be saved
     m_state_history.clear();
     
-    // Motion compensation: undistort point cloud using IMU-propagated states
+    // === 1. Undistortion ===
+    auto start_undistort = std::chrono::high_resolution_clock::now();
     PointCloudPtr undistorted_cloud = lidar.cloud;
     if (m_params.enable_undistortion) {
         undistorted_cloud = UndistortPointCloud(
@@ -430,15 +431,21 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
             lidar.timestamp
         );
     }
+    auto end_undistort = std::chrono::high_resolution_clock::now();
+    double time_undistort = std::chrono::duration<double, std::milli>(end_undistort - start_undistort).count();
     
+    // === 2. Downsampling ===
+    auto start_downsample = std::chrono::high_resolution_clock::now();
     auto downsampled_scan = std::make_shared<PointCloud>();
     VoxelGrid scan_filter;
     scan_filter.SetInputCloud(undistorted_cloud);
     scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));  // Use config voxel size for input scan
     scan_filter.Filter(*downsampled_scan);
+    auto end_downsample = std::chrono::high_resolution_clock::now();
+    double time_downsample = std::chrono::duration<double, std::milli>(end_downsample - start_downsample).count();
 
-
-    // range filter to remove far points
+    // === 3. Range filtering ===
+    auto start_range_filter = std::chrono::high_resolution_clock::now();
     PointCloudPtr range_filtered_scan = std::make_shared<PointCloud>();
     unsigned int initial_size = downsampled_scan->size();
     unsigned int final_size = 0;
@@ -451,8 +458,8 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
             final_size++;
         }
     }
-
-
+    auto end_range_filter = std::chrono::high_resolution_clock::now();
+    double time_range_filter = std::chrono::duration<double, std::milli>(end_range_filter - start_range_filter).count();
     
     // Create LidarData with downsampled cloud for all processing
     LidarData downsampled_lidar(lidar.timestamp, range_filtered_scan);
@@ -471,12 +478,17 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
         return;
     }
     
-    // Iterated Kalman Filter Update with downsampled data
+    // === 4. IEKF Update ===
+    auto start_iekf = std::chrono::high_resolution_clock::now();
     UpdateWithLidar(downsampled_lidar);
+    auto end_iekf = std::chrono::high_resolution_clock::now();
+    double time_iekf = std::chrono::duration<double, std::milli>(end_iekf - start_iekf).count();
     
-    // Update local map with downsampled scan (only for keyframes)
-    // UpdateLocalMap internally checks if current frame is keyframe
+    // === 5. Map Update ===
+    auto start_map_update = std::chrono::high_resolution_clock::now();
     UpdateLocalMap(range_filtered_scan);
+    auto end_map_update = std::chrono::high_resolution_clock::now();
+    double time_map_update = std::chrono::duration<double, std::milli>(end_map_update - start_map_update).count();
     
     // Update statistics
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -505,18 +517,7 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     // Track processing time statistics
     m_processing_times.push_back(processing_time);
     
-    // Clean summary log
-    spdlog::info("======================= Frame {} =========================", m_frame_count);
-    spdlog::info("Processing time: {:.2f} ms", processing_time);
-    spdlog::info("IMU Gyro bias: [{:.6f}, {:.6f}, {:.6f}] rad/s",
-                 m_current_state.m_gyro_bias.x(), 
-                 m_current_state.m_gyro_bias.y(), 
-                 m_current_state.m_gyro_bias.z());
-    spdlog::info("IMU Acc bias:  [{:.6f}, {:.6f}, {:.6f}] m/s²",
-                 m_current_state.m_acc_bias.x(), 
-                 m_current_state.m_acc_bias.y(), 
-                 m_current_state.m_acc_bias.z());
-    spdlog::info("==========================================================\n");
+
 }
 
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
@@ -897,6 +898,7 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     if (!m_voxel_map) {
         m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
         m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
+        m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
     }
 
     m_voxel_map->UpdateVoxelMap(transformed_scan, sensor_position, m_params.max_map_distance, is_keyframe);
@@ -936,6 +938,7 @@ void Estimator::CleanLocalMap() {
         if (!m_map_cloud->empty()) {
             m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
             m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
+            m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
             m_voxel_map->AddPointCloud(m_map_cloud);
             spdlog::debug("[Estimator] VoxelMap rebuilt after cleaning");
         }

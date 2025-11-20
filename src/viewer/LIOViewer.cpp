@@ -31,12 +31,14 @@ LIOViewer::LIOViewer()
     , m_show_surfels("ui.6. Show Surfels", false, true)  // Enable surfel visualization by default
     , m_auto_playback("ui.7. Auto Playback", true, true)  // Enable auto playback by default
     , m_step_forward_button("ui.8. Step Forward", false, false)
+    , m_follow_mode("ui.9. Follow Mode (Top-Down)", true, true)  // Enable follow mode with mouse zoom support
     , m_frame_id("info.Frame ID", 0)
     , m_total_points("info.Total Points", 0)
     , m_point_size(2.0f)
     , m_trajectory_width(3.0f)
     , m_coordinate_frame_size(2.0f)
     , m_coordinate_frame_width(3.0f)
+    , m_camera_target(0.0f, 0.0f, 0.0f)
     , m_initialized(false)
 {
     m_current_pose = Eigen::Matrix4f::Identity();
@@ -138,12 +140,13 @@ void LIOViewer::SetupPanels() {
     m_display_3d = pangolin::CreateDisplay()
         .SetBounds(0.0, 1.0, 
                    pangolin::Attach::Frac(ui_panel_width), 1.0)
-        .SetHandler(new pangolin::Handler3D(m_cam_state));
+        .SetHandler(new pangolin::Handler3D(m_cam_state, pangolin::AxisZ, 1.0f, 0.01f));
     
     spdlog::info("[LIOViewer] UI panel and displays created successfully");
     spdlog::info("[LIOViewer] Controls:");
     spdlog::info("  Toggle 'Auto Playback' checkbox to enable/disable automatic playback");
     spdlog::info("  Click 'Step Forward' button to go to next LiDAR frame (when auto playback is OFF)");
+    spdlog::info("  Use 'Camera Height' slider to zoom in/out in follow mode");
 }
 
 void LIOViewer::Shutdown() {
@@ -249,6 +252,55 @@ void LIOViewer::RenderLoop() {
 
         // Clear screen
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Update camera for follow mode (using Follow method for zoom support)
+        if (m_follow_mode.Get()) {
+            Eigen::Matrix4f current_pose_copy;
+            {
+                std::lock_guard<std::mutex> lock(m_data_mutex);
+                current_pose_copy = m_current_pose;
+            }
+            
+            // Extract current position
+            Eigen::Vector3f current_pos = current_pose_copy.block<3, 1>(0, 3);
+            
+            // Smooth interpolation
+            float follow_speed = 0.1f;
+            m_camera_target = (1.0f - follow_speed) * m_camera_target + 
+                             follow_speed * current_pos;
+            
+            // Create follow matrix for Pangolin Follow() method
+            // This allows user to zoom/pan while following the target
+            pangolin::OpenGlMatrix follow_matrix = pangolin::OpenGlMatrix::Translate(
+                m_camera_target.x(), 
+                m_camera_target.y(), 
+                m_camera_target.z()
+            );
+            
+            // Use Follow method - allows zoom with mouse wheel
+            m_cam_state.Follow(follow_matrix, true);
+            
+            // Set initial top-down view on first activation
+            static bool first_follow_activation = true;
+            if (first_follow_activation) {
+                float initial_height = 50.0f;
+                pangolin::OpenGlMatrix initial_view = pangolin::ModelViewLookAt(
+                    m_camera_target.x(), 
+                    m_camera_target.y(), 
+                    m_camera_target.z() + initial_height,
+                    m_camera_target.x(), 
+                    m_camera_target.y(), 
+                    m_camera_target.z(),
+                    0, 1, 0
+                );
+                m_cam_state.SetModelViewMatrix(initial_view);
+                first_follow_activation = false;
+            }
+        } else {
+            // Reset first activation flag when follow mode is disabled
+            static bool first_follow_activation = true;
+            first_follow_activation = true;
+        }
 
         // Activate 3D view
         m_display_3d.Activate(m_cam_state);
@@ -594,8 +646,10 @@ void LIOViewer::DrawSurfels(std::shared_ptr<VoxelMap> voxel_map) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     
-    // Surfel disc radius = L1 voxel size (3 * L0 voxel size)
-    float disc_radius = voxel_map->GetVoxelSize() * 1.5f;  // Half of L1 size
+    // Surfel disc radius = L1 voxel size (hierarchy_factor × L0 voxel size)
+    // Use 1/6 of L1 size for better visualization
+    float l1_voxel_size = voxel_map->GetVoxelSize() * voxel_map->GetHierarchyFactor();
+    float disc_radius = l1_voxel_size / 2.0f;  // 1/6 of L1 size
     const int num_segments = 20;  // Circle resolution
     
     for (const auto& surfel_data : surfels) {

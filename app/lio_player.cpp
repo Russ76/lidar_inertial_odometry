@@ -427,6 +427,7 @@ int main(int argc, char** argv) {
     estimator.m_params.enable_undistortion = config.estimator.enable_undistortion;
     estimator.m_params.max_map_distance = config.estimator.max_distance;
     estimator.m_params.max_voxel_hit_count = config.estimator.max_voxel_hit_count;
+    estimator.m_params.voxel_hierarchy_factor = config.estimator.voxel_hierarchy_factor;
     estimator.m_params.frustum_fov_horizontal = config.estimator.frustum_fov_horizontal;
     estimator.m_params.frustum_fov_vertical = config.estimator.frustum_fov_vertical;
     estimator.m_params.frustum_max_range = config.estimator.frustum_max_range;

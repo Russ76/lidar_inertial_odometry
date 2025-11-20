@@ -42,6 +42,7 @@ struct LIOConfig {
         // Local map parameters
         double max_distance;            // Maximum distance for map points (meters)
         int max_voxel_hit_count;        // Maximum hit count for voxel occupancy (1-N)
+        int voxel_hierarchy_factor;     // L1 voxel factor: L1 = factor × L0 (3 = 3×3×3, 5 = 5×5×5, etc.)
         double frustum_fov_horizontal;  // Frustum FOV horizontal (degrees)
         double frustum_fov_vertical;    // Frustum FOV vertical (degrees)
         double frustum_max_range;       // Maximum range for frustum culling (meters)

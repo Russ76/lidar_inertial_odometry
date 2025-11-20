@@ -52,8 +52,8 @@ struct PKOConfig {
  * - Pure double precision for numerical stability
  * 
  * Reference:
- * S. Choi and T. -W. Kim, "Probabilistic Kernel Optimization for Robust State 
- * Estimation," IEEE Robotics and Automation Letters, vol. 10, no. 3, 
+ * Seungwon Choi and Tae-Wan Kim, "Probabilistic Kernel Optimization for Robust State Estimation,"
+ * IEEE Robotics and Automation Letters, vol. 10, no. 3, 
  * pp. 2998-3005, March 2025, doi: 10.1109/LRA.2025.3536294.
  */
 class ProbabilisticKernelOptimizer {

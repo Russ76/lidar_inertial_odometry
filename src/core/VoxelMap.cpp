@@ -21,7 +21,10 @@
 namespace lio {
 
 VoxelMap::VoxelMap(float voxel_size) 
-    : m_voxel_size(voxel_size), m_max_hit_count(10) {
+    : m_voxel_size(voxel_size)
+    , m_max_hit_count(10)
+    , m_hierarchy_factor(3)  // Default: 3×3×3
+{
 }
 
 void VoxelMap::SetVoxelSize(float size) {
@@ -33,23 +36,35 @@ void VoxelMap::SetVoxelSize(float size) {
     if (std::abs(m_voxel_size - size) > 1e-6f) {
         m_voxel_size = size;
         
-        // Rebuild map with new voxel size
-        std::vector<Point3D> points_copy = m_all_points;
+        // Clear map - cannot easily rebuild without original points
         Clear();
-        for (const auto& pt : points_copy) {
-            AddPoint(pt);
-        }
+        spdlog::warn("[VoxelMap] Voxel size changed - map cleared");
+    }
+}
+
+void VoxelMap::SetHierarchyFactor(int factor) {
+    if (factor <= 0 || factor % 2 == 0) {
+        spdlog::error("[VoxelMap] Hierarchy factor must be positive and odd (3, 5, 7, etc.). Got: {}", factor);
+        return;
+    }
+    
+    // If factor changed, need to rebuild hierarchy
+    if (m_hierarchy_factor != factor) {
+        m_hierarchy_factor = factor;
+        
+        // Clear map - hierarchy structure is incompatible
+        Clear();
+        spdlog::info("[VoxelMap] Hierarchy factor changed to {} ({}×{}×{}) - map cleared", 
+                     factor, factor, factor, factor);
     }
 }
 
 VoxelKey VoxelMap::PointToVoxelKey(const Point3D& point, int level) const {
     // Level 0: 1×1×1 (voxel_size)
-    // Level 1: 3×3×3 (3 * voxel_size)
-    // Level 2: 9×9×9 (9 * voxel_size)
+    // Level 1: factor×factor×factor (factor * voxel_size)
     
     float scale = m_voxel_size;
-    if (level == 1) scale *= 3.0f;
-    else if (level == 2) scale *= 9.0f;
+    if (level == 1) scale *= static_cast<float>(m_hierarchy_factor);
     
     int vx = static_cast<int>(std::floor(point.x / scale));
     int vy = static_cast<int>(std::floor(point.y / scale));
@@ -58,27 +73,19 @@ VoxelKey VoxelMap::PointToVoxelKey(const Point3D& point, int level) const {
 }
 
 VoxelKey VoxelMap::GetParentKey(const VoxelKey& key) const {
-    // Parent key: divide by 3 (floor division)
+    // Parent key: divide by hierarchy_factor (floor division)
+    int f = m_hierarchy_factor;
     return VoxelKey(
-        key.x >= 0 ? key.x / 3 : (key.x - 2) / 3,
-        key.y >= 0 ? key.y / 3 : (key.y - 2) / 3,
-        key.z >= 0 ? key.z / 3 : (key.z - 2) / 3
+        key.x >= 0 ? key.x / f : (key.x - (f - 1)) / f,
+        key.y >= 0 ? key.y / f : (key.y - (f - 1)) / f,
+        key.z >= 0 ? key.z / f : (key.z - (f - 1)) / f
     );
 }
 
 void VoxelMap::RegisterToParent(const VoxelKey& key_L0) {
-    // Get L1 parent
+    // Get L1 parent and register
     VoxelKey parent_L1 = GetParentKey(key_L0);
-    
-    // Register to L1
-    bool was_L1_empty = m_voxels_L1[parent_L1].occupied_children.empty();
     m_voxels_L1[parent_L1].occupied_children.insert(key_L0);
-    
-    // If L1 was empty, register to L2
-    if (was_L1_empty) {
-        VoxelKey grandparent_L2 = GetParentKey(parent_L1);
-        m_voxels_L2[grandparent_L2].occupied_children.insert(parent_L1);
-    }
 }
 
 void VoxelMap::UnregisterFromParent(const VoxelKey& key_L0) {
@@ -91,21 +98,8 @@ void VoxelMap::UnregisterFromParent(const VoxelKey& key_L0) {
     // Unregister from L1
     it_L1->second.occupied_children.erase(key_L0);
     
-    // If L1 becomes empty, unregister from L2
+    // If L1 becomes empty, clean it up
     if (it_L1->second.occupied_children.empty()) {
-        VoxelKey grandparent_L2 = GetParentKey(parent_L1);
-        
-        auto it_L2 = m_voxels_L2.find(grandparent_L2);
-        if (it_L2 != m_voxels_L2.end()) {
-            it_L2->second.occupied_children.erase(parent_L1);
-            
-            // Clean up empty L2
-            if (it_L2->second.occupied_children.empty()) {
-                m_voxels_L2.erase(it_L2);
-            }
-        }
-        
-        // Clean up empty L1
         m_voxels_L1.erase(it_L1);
     }
 }
@@ -114,31 +108,27 @@ void VoxelMap::AddPoint(const Point3D& point) {
     // Get L0 voxel key for this point
     VoxelKey key = PointToVoxelKey(point, 0);
     
-    // Add point to global storage
-    int global_index = static_cast<int>(m_all_points.size());
-    m_all_points.push_back(point);
-    
     // Check if voxel is newly occupied
-    bool was_empty = (m_voxels_L0.find(key) == m_voxels_L0.end());
+    auto it = m_voxels_L0.find(key);
+    bool was_empty = (it == m_voxels_L0.end());
     
     // Get or create voxel data
     VoxelNode_L0& voxel_data = m_voxels_L0[key];
     
     // Update centroid with weighted average
     Eigen::Vector3f point_vec(point.x, point.y, point.z);
-    int n = voxel_data.point_indices.size();
+    int n = voxel_data.point_count;
     
     if (n == 0) {
         // First point in voxel - initialize with hit_count = 1
         voxel_data.centroid = point_vec;
         voxel_data.hit_count = 1;  // Start with 1, will be incremented by UpdateVoxelMap
+        voxel_data.point_count = 1;
     } else {
         // Weighted average: new_centroid = (n * old_centroid + new_point) / (n + 1)
         voxel_data.centroid = (voxel_data.centroid * n + point_vec) / (n + 1);
+        voxel_data.point_count++;
     }
-    
-    // Add index to voxel's point list
-    voxel_data.point_indices.push_back(global_index);
     
     // Register to hierarchy if newly occupied
     if (was_empty) {
@@ -151,17 +141,10 @@ void VoxelMap::AddPointCloud(const PointCloudPtr& cloud) {
         spdlog::warn("[VoxelMap] UpdateVoxelMap called with empty point cloud");
         return;
     }
-    
-    // Reserve space for efficiency
-    m_all_points.reserve(m_all_points.size() + cloud->size());
 
-    spdlog::info("[VoxelMap] Adding {} points to VoxelMap", cloud->size());
-    
     for (size_t i = 0; i < cloud->size(); ++i) {
         AddPoint(cloud->at(i));
     }
-
-    spdlog::info("[VoxelMap] Total points after addition: {}", m_all_points.size());
 }
 
 std::vector<VoxelKey> VoxelMap::GetNeighborVoxels(const VoxelKey& center, float search_distance) const {
@@ -188,97 +171,9 @@ std::vector<VoxelKey> VoxelMap::GetNeighborVoxels(const VoxelKey& center, float 
     return neighbors;
 }
 
-int VoxelMap::FindKNearestNeighbors(const Point3D& query_point, 
-                                     int K,
-                                     std::vector<int>& indices,
-                                     std::vector<float>& squared_distances) {
-    indices.clear();
-    squared_distances.clear();
-    
-    if (K <= 0 || m_all_points.empty()) {
-        return 0;
-    }
-    
-    // Get query position
-    Eigen::Vector3f query_vec(query_point.x, query_point.y, query_point.z);
-    
-    // Result candidates
-    struct Candidate {
-        VoxelKey voxel_key;
-        Eigen::Vector3f centroid;
-        float squared_distance;
-        
-        bool operator<(const Candidate& other) const {
-            return squared_distance < other.squared_distance;
-        }
-    };
-    
-    std::vector<Candidate> candidates;
-    candidates.reserve(K * 3);
-    
-    // === SIMPLIFIED HIERARCHICAL SEARCH ===
-    // Find query's grandparent (L2) and search only within it
-    
-    VoxelKey query_L2 = PointToVoxelKey(query_point, 2);
-    
-    // Find the L2 voxel containing the query point
-    auto it_L2 = m_voxels_L2.find(query_L2);
-    
-    if (it_L2 != m_voxels_L2.end() && !it_L2->second.occupied_children.empty()) {
-        // Iterate through all L1 children of this L2
-        for (const VoxelKey& key_L1 : it_L2->second.occupied_children) {
-            auto it_L1 = m_voxels_L1.find(key_L1);
-            if (it_L1 == m_voxels_L1.end() || it_L1->second.occupied_children.empty()) {
-                continue;
-            }
-            
-            // Iterate through all L0 children of this L1
-            for (const VoxelKey& key_L0 : it_L1->second.occupied_children) {
-                auto it_L0 = m_voxels_L0.find(key_L0);
-                if (it_L0 == m_voxels_L0.end() || it_L0->second.point_indices.empty()) {
-                    continue;
-                }
-                
-                // Calculate distance to centroid
-                const Eigen::Vector3f& centroid = it_L0->second.centroid;
-                float sq_dist = (query_vec - centroid).squaredNorm();
-                
-                candidates.push_back({key_L0, centroid, sq_dist});
-            }
-        }
-    }
-    
-    // If no candidates found, return 0
-    if (candidates.empty()) {
-        return 0;
-    }
-    
-    // === Sorting: Find K nearest ===
-    std::partial_sort(candidates.begin(), 
-                     candidates.begin() + std::min(K, static_cast<int>(candidates.size())),
-                     candidates.end());
-    
-    // === Result Building ===
-    int num_found = std::min(K, static_cast<int>(candidates.size()));
-    indices.reserve(num_found);
-    squared_distances.reserve(num_found);
-    
-    for (int i = 0; i < num_found; ++i) {
-        const VoxelNode_L0& voxel_data = m_voxels_L0.at(candidates[i].voxel_key);
-        if (!voxel_data.point_indices.empty()) {
-            indices.push_back(voxel_data.point_indices[0]);
-            squared_distances.push_back(candidates[i].squared_distance);
-        }
-    }
-    
-    return indices.size();
-}
-
 void VoxelMap::Clear() {
     m_voxels_L0.clear();
     m_voxels_L1.clear();
-    m_voxels_L2.clear();
-    m_all_points.clear();
 }
 
 void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
@@ -294,39 +189,40 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         return;
     }
     
-    // Step 1: Add new points (creates new voxels OR updates existing centroid)
-    // This is already handled by AddPointCloud -> AddPoint
-    // AddPoint updates centroid using weighted average if voxel exists
-    AddPointCloud(new_cloud);
-
-    // Step 2: Mark L0 voxels - L2-based efficient marking
-    std::unordered_set<VoxelKey, VoxelKeyHash> hit_voxels_L0_set;
-    std::unordered_set<VoxelKey, VoxelKeyHash> hit_L2_set;
+    auto start_total = std::chrono::high_resolution_clock::now();
     
-    // First, collect all L2 voxels containing the new points
+    // Step 1: Add new points (creates new voxels OR updates existing centroid)
+    auto start_step1 = std::chrono::high_resolution_clock::now();
+    AddPointCloud(new_cloud);
+    auto end_step1 = std::chrono::high_resolution_clock::now();
+    double time_step1 = std::chrono::duration<double, std::milli>(end_step1 - start_step1).count();
+
+    // Step 2: Mark L0 voxels - L1-based efficient marking
+    auto start_step2 = std::chrono::high_resolution_clock::now();
+    std::unordered_set<VoxelKey, VoxelKeyHash> hit_voxels_L0_set;
+    std::unordered_set<VoxelKey, VoxelKeyHash> hit_L1_set;
+    
+    // First, collect all L1 voxels containing the new points
     for (const auto& pt : *new_cloud) {
-        VoxelKey key_L2 = PointToVoxelKey(pt, 2);
-        hit_L2_set.insert(key_L2);
+        VoxelKey key_L1 = PointToVoxelKey(pt, 1);
+        hit_L1_set.insert(key_L1);
     }
     
-    // Then, mark all occupied L0 voxels within those L2 voxels
-    for (const VoxelKey& key_L2 : hit_L2_set) {
-        auto it_L2 = m_voxels_L2.find(key_L2);
-        if (it_L2 == m_voxels_L2.end()) continue;
+    // Then, mark all occupied L0 voxels within those L1 voxels
+    for (const VoxelKey& key_L1 : hit_L1_set) {
+        auto it_L1 = m_voxels_L1.find(key_L1);
+        if (it_L1 == m_voxels_L1.end()) continue;
         
-        // Iterate through occupied L1 children
-        for (const VoxelKey& key_L1 : it_L2->second.occupied_children) {
-            auto it_L1 = m_voxels_L1.find(key_L1);
-            if (it_L1 == m_voxels_L1.end()) continue;
-            
-            // Mark all occupied L0 children
-            for (const VoxelKey& key_L0 : it_L1->second.occupied_children) {
-                hit_voxels_L0_set.insert(key_L0);
-            }
+        // Mark all occupied L0 children
+        for (const VoxelKey& key_L0 : it_L1->second.occupied_children) {
+            hit_voxels_L0_set.insert(key_L0);
         }
     }
+    auto end_step2 = std::chrono::high_resolution_clock::now();
+    double time_step2 = std::chrono::duration<double, std::milli>(end_step2 - start_step2).count();
     
     // Step 3: Update hit counts for all existing L0 voxels
+    auto start_step3 = std::chrono::high_resolution_clock::now();
     std::vector<VoxelKey> voxels_to_remove;
     
     for (auto& pair : m_voxels_L0) {
@@ -349,23 +245,25 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             }
         }
     }
+    auto end_step3 = std::chrono::high_resolution_clock::now();
+    double time_step3 = std::chrono::duration<double, std::milli>(end_step3 - start_step3).count();
     
     // Step 4: Remove L0 voxels with hit_count < 1 and update hierarchy
+    auto start_step4 = std::chrono::high_resolution_clock::now();
     for (const auto& key : voxels_to_remove) {
-        UnregisterFromParent(key);  // Remove from L1/L2 hierarchy
+        UnregisterFromParent(key);  // Remove from L1 hierarchy
         m_voxels_L0.erase(key);
     }
+    auto end_step4 = std::chrono::high_resolution_clock::now();
+    double time_step4 = std::chrono::duration<double, std::milli>(end_step4 - start_step4).count();
     
-    // Step 5: Batch update L1 and L2 hit counts based on affected parents
+    // Step 5: Update L1 hit counts based on affected parents
+    auto start_step5 = std::chrono::high_resolution_clock::now();
     std::unordered_set<VoxelKey, VoxelKeyHash> affected_L1;
-    std::unordered_set<VoxelKey, VoxelKeyHash> affected_L2;
     
     for (const VoxelKey& hit_L0 : hit_voxels_L0_set) {
         VoxelKey parent_L1 = GetParentKey(hit_L0);
-        VoxelKey grandparent_L2 = GetParentKey(parent_L1);
-        
         affected_L1.insert(parent_L1);
-        affected_L2.insert(grandparent_L2);
     }
     
     // Update L1 hit counts
@@ -377,66 +275,100 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             }
         }
     }
-    
-    // Update L2 hit counts
-    for (const VoxelKey& key_L2 : affected_L2) {
-        auto it = m_voxels_L2.find(key_L2);
-        if (it != m_voxels_L2.end()) {
-            if (it->second.hit_count < m_max_hit_count) {
-                it->second.hit_count++;
-            }
-        }
-    }
+    auto end_step5 = std::chrono::high_resolution_clock::now();
+    double time_step5 = std::chrono::duration<double, std::milli>(end_step5 - start_step5).count();
     
     // Step 6: Create/update surfels for affected L1 voxels
+    auto start_step6 = std::chrono::high_resolution_clock::now();
     const int MIN_OCCUPIED_CHILDREN = 5;  // Minimum 5 occupied L0 voxels required to create surfel
     const float MAX_PLANARITY_SCORE = 0.05f;  // Consider as planar if sigma_min / sigma_max < 0.1
+    const float MAX_POINT_TO_PLANE_DIST = 0.15f;  // Max distance for incremental update (15cm)
+    
+    int surfels_created = 0;
+    int surfels_skipped = 0;
     
     for (const VoxelKey& key_L1 : affected_L1) {
         auto it_L1 = m_voxels_L1.find(key_L1);
         if (it_L1 == m_voxels_L1.end()) continue;
         
         VoxelNode_L1& node_L1 = it_L1->second;
+        int current_child_count = node_L1.occupied_children.size();
         
         // Check if enough L0 voxels are occupied
-        if (node_L1.occupied_children.size() < MIN_OCCUPIED_CHILDREN) {
+        if (current_child_count < MIN_OCCUPIED_CHILDREN) {
             node_L1.has_surfel = false;
             continue;
         }
         
-        // Collect all points from occupied L0 children
-        std::vector<Eigen::Vector3f> collected_points;
+        // === INCREMENTAL UPDATE: Check if existing surfel is still valid ===
+        if (node_L1.has_surfel) {
+            // Check if geometry changed significantly
+            int child_count_change = std::abs(current_child_count - node_L1.last_child_count);
+            
+            // If child count didn't change much, check point-to-plane distances
+            if (child_count_change <= 2) {
+                bool all_points_close = true;
+                float max_dist = 0.0f;
+                
+                // Check all L0 centroids against existing surfel plane
+                for (const VoxelKey& key_L0 : node_L1.occupied_children) {
+                    auto it_L0 = m_voxels_L0.find(key_L0);
+                    if (it_L0 == m_voxels_L0.end()) continue;
+                    
+                    // Point-to-plane distance: |n · (p - c)|
+                    Eigen::Vector3f diff = it_L0->second.centroid - node_L1.surfel_centroid;
+                    float dist = std::abs(node_L1.surfel_normal.dot(diff));
+                    max_dist = std::max(max_dist, dist);
+                    
+                    if (dist > MAX_POINT_TO_PLANE_DIST) {
+                        all_points_close = false;
+                        break;
+                    }
+                }
+                
+                // If all points are close, skip SVD (surfel is still valid)
+                if (all_points_close) {
+                    surfels_skipped++;
+                    surfels_created++;  // Count as "created" for statistics
+                    continue;
+                }
+            }
+        }
+        
+        // === FULL UPDATE: Recompute surfel with SVD ===
+        
+        // Collect centroids from occupied L0 children
+        std::vector<Eigen::Vector3f> collected_centroids;
+        collected_centroids.reserve(node_L1.occupied_children.size());
+        
         for (const VoxelKey& key_L0 : node_L1.occupied_children) {
             auto it_L0 = m_voxels_L0.find(key_L0);
             if (it_L0 == m_voxels_L0.end()) continue;
             
-            // Add all points from this L0 voxel
-            for (int point_idx : it_L0->second.point_indices) {
-                const Point3D& pt = m_all_points[point_idx];
-                collected_points.emplace_back(pt.x, pt.y, pt.z);
-            }
+            // Use voxel centroid as representative point
+            collected_centroids.push_back(it_L0->second.centroid);
         }
         
-        // Need at least 5 points for stable plane fitting
-        if (collected_points.size() < 5) {
+        // Need at least 5 centroids for stable plane fitting
+        if (collected_centroids.size() < 5) {
             node_L1.has_surfel = false;
             continue;
         }
         
         // Compute centroid
         Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
-        for (const auto& pt : collected_points) {
+        for (const auto& pt : collected_centroids) {
             centroid += pt;
         }
-        centroid /= static_cast<float>(collected_points.size());
+        centroid /= static_cast<float>(collected_centroids.size());
         
         // Compute covariance matrix
         Eigen::Matrix3f covariance = Eigen::Matrix3f::Zero();
-        for (const auto& pt : collected_points) {
+        for (const auto& pt : collected_centroids) {
             Eigen::Vector3f diff = pt - centroid;
             covariance += diff * diff.transpose();
         }
-        covariance /= static_cast<float>(collected_points.size());
+        covariance /= static_cast<float>(collected_centroids.size());
         
         // SVD decomposition to get eigenvalues and eigenvectors
         Eigen::JacobiSVD<Eigen::Matrix3f> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
@@ -459,26 +391,23 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             normal = -normal;
         }
         
-        // Create surfel
+        // Create surfel and update last child count
         node_L1.has_surfel = true;
         node_L1.surfel_normal = normal;
         node_L1.surfel_centroid = centroid;
         node_L1.surfel_covariance = covariance;
         node_L1.planarity_score = planarity;
+        node_L1.last_child_count = current_child_count;
+        surfels_created++;
     }
+    auto end_step6 = std::chrono::high_resolution_clock::now();
+    double time_step6 = std::chrono::duration<double, std::milli>(end_step6 - start_step6).count();
     
-    // Step 7: Log surfel statistics
-    int total_L1_voxels = static_cast<int>(m_voxels_L1.size());
-    int surfels_created = 0;
-    for (const auto& pair : m_voxels_L1) {
-        if (pair.second.has_surfel) {
-            surfels_created++;
-        }
-    }
+    // Calculate total time
+    auto end_total = std::chrono::high_resolution_clock::now();
+    double time_total = std::chrono::duration<double, std::milli>(end_total - start_total).count();
     
-    spdlog::info("[VoxelMap] Surfel statistics: {} surfels out of {} L1 voxels ({:.1f}%)",
-                 surfels_created, total_L1_voxels, 
-                 total_L1_voxels > 0 ? (100.0f * surfels_created / total_L1_voxels) : 0.0f);
+   
 }
 
 std::vector<VoxelKey> VoxelMap::GetOccupiedVoxels() const {
@@ -486,7 +415,7 @@ std::vector<VoxelKey> VoxelMap::GetOccupiedVoxels() const {
     occupied_voxels.reserve(m_voxels_L0.size());
     
     for (const auto& pair : m_voxels_L0) {
-        if (!pair.second.point_indices.empty()) {  // Only add non-empty voxels
+        if (pair.second.point_count > 0) {  // Only add non-empty voxels
             occupied_voxels.push_back(pair.first);
         }
     }

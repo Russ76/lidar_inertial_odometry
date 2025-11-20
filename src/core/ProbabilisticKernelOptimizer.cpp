@@ -62,10 +62,10 @@ double ProbabilisticKernelOptimizer::CalculateScaleFactor(const std::vector<doub
     for (size_t i = 1; i < m_alpha_candidates.size(); ++i) {
         double alpha = m_alpha_candidates[i];
         
-        // Graduated non-convexity: skip alphas larger than reference
-        if (alpha >= m_alpha_star_ref) {
-            continue;
-        }
+        // // Graduated non-convexity: skip alphas larger than reference
+        // if (alpha >= m_alpha_star_ref) {
+        //     continue;
+        // }
         
         double js_divergence = CalculateJSDivergence(alpha);
         
