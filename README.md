@@ -1,6 +1,4 @@
-# Surfel-LIO
-
-Surfel-LIO: Efficient LiDAR-Inertial Odometry via Pre-computed Surfels in Hierarchical Voxel Hash Maps
+# Lidar-Inertial Odometry
 
 ### MIT License
 
