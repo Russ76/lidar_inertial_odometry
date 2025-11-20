@@ -29,10 +29,8 @@ estimator:
   scan_duration: 0.1          # LiDAR scan duration in seconds (100ms for Livox Avia)
   init_imu_samples: 100       # Number of IMU samples for initialization
   voxel_size: 0.4            # Voxel size in meters for VoxelMap
-  max_correspondences: 2000    # Maximum number of correspondences per frame
-  max_correspondence_distance: 1.0  # Maximum distance for correspondence matching (meters)
   max_iterations: 10          # Maximum Gauss-Newton iterations
-  convergence_threshold: 0.001 # Convergence threshold for optimization
+  convergence_threshold: 0.005 # Convergence threshold for optimization
   
   # Local map parameters
   max_distance: 50.0           # Maximum distance to keep map points (meters)
@@ -63,11 +61,9 @@ viewer:
 playback:
   playback_speed: 10.0          # Playback speed multiplier
 
-# IMU parameters (Livox Avia built-in IMU)
 imu:
-  gyro_noise_density: 1.75e-4     # Gyroscope noise density [rad/s/sqrt(Hz)]
-  acc_noise_density: 1.86e-3      # Accelerometer noise density [m/s^2/sqrt(Hz)]
-  gyro_bias_random_walk: 1.87e-5  # Gyroscope bias random walk [rad/s^2/sqrt(Hz)]
-  acc_bias_random_walk: 4.33e-4   # Accelerometer bias random walk [m/s^3/sqrt(Hz)]
+  gyro_noise_density: 0.01     # Gyroscope noise density [rad/s/sqrt(Hz)]
+  acc_noise_density: 0.01      # Accelerometer noise density [m/s^2/sqrt(Hz)]
+  gyro_bias_random_walk: 0.0001  # Gyroscope bias random walk [rad/s^2/sqrt(Hz)]
+  acc_bias_random_walk: 0.0001   # Accelerometer bias random walk [m/s^3/sqrt(Hz)]
   gravity: [0.0, 0.0, -9.81]      # Gravity vector [m/s^2]
-

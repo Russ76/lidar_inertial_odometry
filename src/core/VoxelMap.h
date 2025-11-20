@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <mutex>
 #include <Eigen/Dense>
 
 namespace lio {
@@ -305,6 +306,9 @@ private:
     
     /// Hit markers for current scan visualization
     std::unordered_map<VoxelKey, bool, VoxelKeyHash> m_hit_voxels;
+    
+    /// Thread synchronization recursive mutex for thread-safe access (allows re-locking)
+    mutable std::recursive_mutex m_mutex;
 };
 
 } // namespace lio

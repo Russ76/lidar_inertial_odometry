@@ -148,17 +148,18 @@ bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
     // 5. Initialize state
     m_current_state.Reset();
     
-    // 6. Check accelerometer norm (should be ~9.81 m/s² if stationary)
+    // 6. Check accelerometer norm (should be ~g if stationary)
     float acc_norm = mean_acc.norm();
+    float gravity_magnitude = m_params.gravity.norm();
     
-    if (std::abs(acc_norm - 9.81f) > 1.5f) {
-        spdlog::error("[Estimator] Accelerometer norm = {:.3f} m/s² (expected ~9.81)", acc_norm);
+    if (std::abs(acc_norm - gravity_magnitude) > 1.5f) {
+        spdlog::error("[Estimator] Accelerometer norm = {:.3f} m/s² (expected ~{:.3f})", acc_norm, gravity_magnitude);
         spdlog::error("[Estimator] Sensor may be moving or miscalibrated. Initialization failed.");
         return false;
     }
     
     // 7. Initialize gravity vector (measured acceleration = -gravity in sensor frame)
-    Eigen::Vector3f gravity_measured = -mean_acc.normalized() * 9.81f;
+    Eigen::Vector3f gravity_measured = -mean_acc.normalized() * gravity_magnitude;
     
     // 8. Set initial gravity (not yet aligned)
     m_current_state.m_gravity = gravity_measured;
@@ -169,9 +170,9 @@ bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
     spdlog::info("[Estimator] Initial gravity (sensor frame): [{:.3f}, {:.3f}, {:.3f}]", 
                  gravity_measured.x(), gravity_measured.y(), gravity_measured.z());
     
-    // 10. Gravity alignment: align world frame so gravity points to [0, 0, -9.81]
+    // 10. Gravity alignment: align world frame so gravity points to configured gravity direction
     // This rotates all states to make gravity vertical
-    Eigen::Vector3f gravity_target(0.0f, 0.0f, -9.81f);
+    Eigen::Vector3f gravity_target = m_params.gravity;
     Eigen::Quaternionf q_align = Eigen::Quaternionf::FromTwoVectors(
         m_current_state.m_gravity.normalized(),
         gravity_target.normalized()
@@ -184,7 +185,7 @@ bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
     m_current_state.m_rotation = R_align * m_current_state.m_rotation;  // Rotate orientation
     m_current_state.m_position = R_align * m_current_state.m_position;  // Rotate position (zero)
     m_current_state.m_velocity = R_align * m_current_state.m_velocity;  // Rotate velocity (zero)
-    m_current_state.m_gravity = R_align * m_current_state.m_gravity;    // Rotate gravity -> [0,0,-9.81]
+    m_current_state.m_gravity = R_align * m_current_state.m_gravity;    // Rotate gravity -> aligned direction
     
   
     // 11. Initialize gyroscope bias (stationary gyro reading = bias)
@@ -194,8 +195,8 @@ bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
     // Stationary condition: acc_measured = -g + bias
     // After gravity alignment: mean_acc ≈ -R_align^T * g_world + bias
     // Therefore: bias = mean_acc + R_align^T * g_world
-    //                 = mean_acc + R_align^T * [0, 0, -9.81]
-    Eigen::Vector3f g_aligned(0.0f, 0.0f, -9.81f);
+    //                 = mean_acc + R_align^T * configured_gravity
+    Eigen::Vector3f g_aligned = m_params.gravity;
 
     // Correct formula: bias = mean_acc + R^T * g
     Eigen::Vector3f acc_bias_estimate = mean_acc + m_current_state.m_rotation.transpose() * g_aligned;
@@ -226,7 +227,7 @@ bool Estimator::GravityInitialization(const std::vector<IMUData>& imu_buffer) {
     spdlog::info("  - IMU samples: {}", imu_buffer.size());
     spdlog::info("  - Acc variance: {:.6f} m^2/s^4", acc_variance);
     spdlog::info("  - Gyr variance: {:.6f} rad^2/s^2", gyr_variance);
-    spdlog::info("  - Acc norm: {:.3f} m/s^2 (expected: 9.81)", acc_norm);
+    spdlog::info("  - Acc norm: {:.3f} m/s^2 (expected: {:.3f})", acc_norm, gravity_magnitude);
     spdlog::info("[Estimator] ===============================================================");
     
     return true;
@@ -249,13 +250,14 @@ void Estimator::Initialize(const IMUData& first_imu) {
     // Initial gravity alignment (assume stationary)
     Eigen::Vector3f acc_world = first_imu.acc;
     float acc_norm = acc_world.norm();
+    float gravity_magnitude = m_params.gravity.norm();
     
-    if (std::abs(acc_norm - 9.81f) < 1.0f) {
+    if (std::abs(acc_norm - gravity_magnitude) < 1.0f) {
         // Use accelerometer to initialize gravity direction
-        m_current_state.m_gravity = -acc_world.normalized() * 9.81f;
+        m_current_state.m_gravity = -acc_world.normalized() * gravity_magnitude;
         
-        // Gravity alignment: rotate world frame so gravity points to [0, 0, -9.81]
-        Eigen::Vector3f gravity_target(0.0f, 0.0f, -9.81f);
+        // Gravity alignment: rotate world frame so gravity points to configured gravity
+        Eigen::Vector3f gravity_target = m_params.gravity;
         Eigen::Quaternionf q_align = Eigen::Quaternionf::FromTwoVectors(
             m_current_state.m_gravity.normalized(),
             gravity_target.normalized()
@@ -271,8 +273,8 @@ void Estimator::Initialize(const IMUData& first_imu) {
                      m_current_state.m_gravity.y(), 
                      m_current_state.m_gravity.z());
     } else {
-        spdlog::warn("[Estimator] Accelerometer norm = {:.3f} (expected ~9.81). Using default gravity.", acc_norm);
-        m_current_state.m_gravity = Eigen::Vector3f(0.0f, 0.0f, -9.81f);
+        spdlog::warn("[Estimator] Accelerometer norm = {:.3f} (expected ~{:.3f}). Using default gravity.", acc_norm, gravity_magnitude);
+        m_current_state.m_gravity = m_params.gravity;
         m_current_state.m_rotation = Eigen::Matrix3f::Identity();
     }
     
@@ -532,18 +534,21 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     // Outer loop: Re-linearization (find new correspondences)
     // Inner loop: Convergence (update state with same correspondences)
     const int max_outer_iterations = m_params.max_iterations;  // Re-linearization iterations from config
-    const int max_inner_iterations = 4;  // State update iterations per correspondence
+    const int max_inner_iterations = 1;  // State update iterations per correspondence
     bool converged = false;
     
     double total_corr_time = 0.0;
     int total_inner_iters = 0;
     double residual_normalization_scale = 1.0;  // For PKO normalization
     
+    // Last correspondences found (for map update after loop)
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
+    
     for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++) {
         // OUTER LOOP: Find correspondences at current state (expensive, ~50ms)
         auto start_corr = std::chrono::high_resolution_clock::now();
 
-        auto correspondences = FindCorrespondences(lidar.cloud);
+        correspondences = FindCorrespondences(lidar.cloud);
         auto end_corr = std::chrono::high_resolution_clock::now();
         double corr_time = std::chrono::duration<double, std::milli>(end_corr - start_corr).count();
         total_corr_time += corr_time;
@@ -581,10 +586,10 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
                 variance /= residuals_for_scale.size();
                 double std_dev = std::sqrt(variance);
                 
-                // Calculate residual normalization scale (std / 6)
-                residual_normalization_scale = std_dev / 6.0;
-                
-                // spdlog::info("[PKO] Residual normalization scale (std/6): {:.6f}", residual_normalization_scale);
+                // Calculate residual normalization scale (std / 3)
+                residual_normalization_scale = std_dev / 3.0;
+
+                // spdlog::info("[PKO] Residual normalization scale (std/3): {:.6f}", residual_normalization_scale);
             }
 
             // Calculate adaptive Huber scale using PKO with normalized residuals
@@ -695,7 +700,9 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
         
         // If inner loop didn't converge or this is first outer iteration, continue to re-linearize
     }
-    
+
+    m_last_correspondences = correspondences;
+
     auto end_total = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
 }
@@ -704,9 +711,9 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
 // Correspondence Finding
 // ============================================================================
 
-std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>> 
+std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> 
 Estimator::FindCorrespondences(const PointCloudPtr scan) {
-    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>> correspondences;
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
     
     // Check if VoxelMap is available and has points
     if (!m_voxel_map || m_voxel_map->GetPointCount() == 0) {
@@ -723,8 +730,6 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
     Eigen::Matrix3f R_wb = m_current_state.m_rotation;
     Eigen::Vector3f t_wb = m_current_state.m_position;
     
-    const float max_point_to_plane_distance = 0.5f;  // Maximum distance from point to surfel plane
-    const int max_correspondences = m_params.max_correspondences;  // Maximum number of correspondences to find
     
     // Build transformation matrix ONCE: T_world_lidar = T_world_body * T_body_lidar
     Eigen::Matrix4f T_wb = Eigen::Matrix4f::Identity();
@@ -744,9 +749,6 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
 
     for (size_t i = 0; i < scan->size(); ++i) {
         // Early termination: stop when we have enough correspondences
-        if (valid_correspondences >= max_correspondences) {
-            break;
-        }
         
         total_attempts++;
         
@@ -773,18 +775,11 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
             continue;  // No surfel in this L1 voxel
         }
         
-        // === 3. Validate planarity (already checked during surfel creation, but double-check) ===
-        if (planarity_score > 0.1f) {
-            continue;  // Not planar enough
-        }
-        
+
         // === 4. Calculate point-to-plane distance ===
         Eigen::Vector3f p_world(query_point.x, query_point.y, query_point.z);
         float dist_to_plane = std::abs(surfel_normal.dot(p_world - surfel_centroid));
         
-        if (dist_to_plane > max_point_to_plane_distance) {
-            continue;  // Point too far from plane
-        }
         
         // === 5. Add valid correspondence ===
         // Plane equation: n^T * x + d = 0, where d = -n^T * centroid
@@ -793,17 +788,12 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         // Store original lidar point
         Eigen::Vector3f p_lidar(pt_scan.x, pt_scan.y, pt_scan.z);
         
-        // Store: (p_lidar, plane_normal_world, plane_d)
-        correspondences.emplace_back(p_lidar, surfel_normal, plane_d);
+        // Store: (p_lidar, plane_normal_world, plane_d, scan_index)
+        correspondences.emplace_back(p_lidar, surfel_normal, plane_d, i);
         valid_correspondences++;
     }
     
-    // Log statistics (only if verbose or at lower frequency)
-    static int call_count = 0;
-    if (++call_count % 10 == 0) {
-        spdlog::debug("[FindCorrespondences] Attempts: {}, Valid: {}, No surfel: {}", 
-                      total_attempts, valid_correspondences, no_surfel_count);
-    }
+ 
 
     return correspondences;
 }
@@ -952,7 +942,7 @@ void Estimator::CleanLocalMap() {
 // ============================================================================
 
 void Estimator::ComputeLidarJacobians(
-    const std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>>& correspondences,
+    const std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>>& correspondences,
     Eigen::MatrixXf& H,
     Eigen::VectorXf& residual) 
 {

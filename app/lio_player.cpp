@@ -15,6 +15,7 @@
 #include "ConfigUtils.h"
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -324,13 +325,24 @@ int main(int argc, char** argv) {
     
     // Parse arguments: config_path is required, dataset_path is optional
     if (argc < 2) {
-        spdlog::error("Usage: {} <config_path> [dataset_path]", argv[0]);
+        spdlog::error("Usage: {} <config_path> [dataset_path] [--headless]", argv[0]);
         spdlog::info("Example: {} ../config/avia.yaml /home/eugene/data/R3LIVE/hku_main_building", argv[0]);
+        spdlog::info("Example (headless): {} ../config/avia.yaml /path/to/dataset --headless", argv[0]);
         spdlog::info("");
         spdlog::info("Arguments:");
         spdlog::info("  config_path   : Path to YAML configuration file (required)");
         spdlog::info("  dataset_path  : Path to dataset directory (optional, overrides config)");
+        spdlog::info("  --headless    : Run without viewer GUI (optional)");
         return 1;
+    }
+    
+    // Check for headless mode
+    bool headless_mode = false;
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--headless") {
+            headless_mode = true;
+            break;
+        }
     }
     
     spdlog::info("════════════════════════════════════════════════════════════════");
@@ -394,24 +406,29 @@ int main(int argc, char** argv) {
     spdlog::info("  LiDAR scans: {}", lidar_data.size());
     spdlog::info("  Time span: {:.3f} seconds", events.back().timestamp - events.front().timestamp);
     
-    // Initialize viewer
+    // Initialize viewer (skip if headless mode)
     spdlog::info("");
-    spdlog::info("Initializing viewer...");
     lio::LIOViewer viewer;
-    if (!viewer.Initialize(config.viewer.window_width, config.viewer.window_height)) {
-        spdlog::error("Failed to initialize viewer");
-        return 1;
+    
+    if (!headless_mode) {
+        spdlog::info("Initializing viewer...");
+        if (!viewer.Initialize(config.viewer.window_width, config.viewer.window_height)) {
+            spdlog::error("Failed to initialize viewer");
+            return 1;
+        }
+        
+        // Set viewer parameters from config
+        viewer.SetShowPointCloud(config.viewer.show_point_cloud);
+        viewer.SetShowTrajectory(config.viewer.show_trajectory);
+        viewer.SetShowCoordinateFrame(config.viewer.show_coordinate_frame);
+        viewer.SetShowMap(config.viewer.show_map);
+        viewer.SetShowVoxelCubes(config.viewer.show_voxel_cubes);
+        viewer.SetAutoPlayback(config.viewer.auto_playback);
+        
+        spdlog::info("Viewer initialized successfully!");
+    } else {
+        spdlog::info("Running in HEADLESS mode (no GUI viewer)");
     }
-    
-    // Set viewer parameters from config
-    viewer.SetShowPointCloud(config.viewer.show_point_cloud);
-    viewer.SetShowTrajectory(config.viewer.show_trajectory);
-    viewer.SetShowCoordinateFrame(config.viewer.show_coordinate_frame);
-    viewer.SetShowMap(config.viewer.show_map);
-    viewer.SetShowVoxelCubes(config.viewer.show_voxel_cubes);
-    viewer.SetAutoPlayback(config.viewer.auto_playback);
-    
-    spdlog::info("Viewer initialized successfully!");
     spdlog::info("");
     
     // Initialize Estimator with gravity initialization
@@ -437,6 +454,9 @@ int main(int argc, char** argv) {
     // Configure extrinsics from config
     estimator.m_params.R_il = config.extrinsics.R_il.cast<float>();
     estimator.m_params.t_il = config.extrinsics.t_il.cast<float>();
+    
+    // Configure gravity from config
+    estimator.m_params.gravity = config.imu.gravity.cast<float>();
     
     spdlog::info("[Estimator] Configured from YAML:");
     spdlog::info("  Voxel size: {:.2f} m", estimator.m_params.voxel_size);
@@ -483,41 +503,55 @@ int main(int argc, char** argv) {
     
     spdlog::info("Skipping first {} events (before gravity initialization)", start_event_idx);
     spdlog::info("Starting playback from t={:.3f}s...", events[start_event_idx].timestamp - events[0].timestamp);
+    spdlog::info("Total LiDAR scans to process: {}", 
+                 std::count_if(events.begin() + start_event_idx, events.end(), 
+                              [](const lio::SensorEvent& e) { return e.type == lio::SensorType::LIDAR; }));
     spdlog::info("Close viewer window to quit");
     spdlog::info("");
     
     // Playback parameters from config
-    double playback_speed = config.playback.playback_speed;
+    double playback_speed = config.playback.playback_speed;  // Always use config value
     double start_time = events[start_event_idx].timestamp;
     
     // Current state
     Eigen::Matrix4f current_pose = Eigen::Matrix4f::Identity();
     int frame_count = 0;
     int lidar_frame_count = 0;
+    int last_progress_frame = 0;
+    
+    // Store trajectory with timestamps
+    std::vector<std::pair<double, lio::State>> trajectory_with_timestamps;
+    
+    // Timing measurement for processing
+    auto processing_start = std::chrono::high_resolution_clock::now();
+    double total_lidar_processing_time = 0.0;  // milliseconds
     
     // Playback loop
     auto playback_start = std::chrono::steady_clock::now();
-    bool was_auto_playback_enabled = viewer.IsAutoPlaybackEnabled();
+    bool was_auto_playback_enabled = !headless_mode && viewer.IsAutoPlaybackEnabled();
     
-    for (size_t event_idx = start_event_idx; event_idx < events.size() && !viewer.ShouldClose(); ++event_idx) {
+    for (size_t event_idx = start_event_idx; event_idx < events.size() && (headless_mode || !viewer.ShouldClose()); ++event_idx) {
         const auto& event = events[event_idx];
         
-        // Check if auto playback state changed (turned back on after being off)
-        bool is_auto_playback_enabled = viewer.IsAutoPlaybackEnabled();
-        if (is_auto_playback_enabled && !was_auto_playback_enabled) {
-            // Reset playback timer when auto playback is re-enabled
-            playback_start = std::chrono::steady_clock::now();
-            start_time = event.timestamp;  // Reset start time to current event
-            spdlog::info("Auto playback re-enabled, resetting timer at event {}", event_idx);
+        // Check if auto playback state changed (turned back on after being off) - only in GUI mode
+        if (!headless_mode) {
+            bool is_auto_playback_enabled = viewer.IsAutoPlaybackEnabled();
+            if (is_auto_playback_enabled && !was_auto_playback_enabled) {
+                // Reset playback timer when auto playback is re-enabled
+                playback_start = std::chrono::steady_clock::now();
+                start_time = event.timestamp;  // Reset start time to current event
+                spdlog::info("Auto playback re-enabled, resetting timer at event {}", event_idx);
+            }
+            was_auto_playback_enabled = is_auto_playback_enabled;
         }
-        was_auto_playback_enabled = is_auto_playback_enabled;
         
         // Calculate target playback time
         double event_time = event.timestamp - start_time;
         double target_time = event_time / playback_speed;
         
-        // Wait until it's time to process this event (only if auto playback is enabled)
-        if (is_auto_playback_enabled) {
+        // Wait until it's time to process this event (only in GUI mode with auto playback)
+        // In headless mode, skip all timing delays and process as fast as possible
+        if (!headless_mode && viewer.IsAutoPlaybackEnabled()) {
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - playback_start).count();
             double wait_time = target_time - elapsed;
@@ -525,19 +559,18 @@ int main(int argc, char** argv) {
             if (wait_time > 0) {
                 std::this_thread::sleep_for(std::chrono::duration<double>(wait_time));
             }
-        } else {
-            // In step-by-step mode, wait for step forward request (only on LiDAR frames)
-            if (event.type == lio::SensorType::LIDAR) {
-                // Check auto playback state inside the loop to allow immediate exit
-                while (!viewer.WasStepForwardRequested() && 
-                       !viewer.ShouldClose() && 
-                       !viewer.IsAutoPlaybackEnabled()) {  // Exit if auto playback is re-enabled
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
+        } else if (!headless_mode && event.type == lio::SensorType::LIDAR) {
+            // In step-by-step mode (GUI only), wait for step forward request on LiDAR frames
+            // Check auto playback state inside the loop to allow immediate exit
+            while (!viewer.WasStepForwardRequested() && 
+                   !viewer.ShouldClose() && 
+                   !viewer.IsAutoPlaybackEnabled()) {  // Exit if auto playback is re-enabled
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
+        // In headless mode: no waiting, process as fast as possible
         
-        if (viewer.ShouldClose()) {
+        if (!headless_mode && viewer.ShouldClose()) {
             break;
         }
         
@@ -552,8 +585,10 @@ int main(int argc, char** argv) {
             lio::State state = estimator.GetCurrentState();
             
             // Compute gravity-compensated acceleration (world frame)
-            // Update IMU bias in viewer
-            viewer.UpdateIMUBias(state.m_gyro_bias, state.m_acc_bias);
+            // Update IMU bias in viewer (only in GUI mode)
+            if (!headless_mode) {
+                viewer.UpdateIMUBias(state.m_gyro_bias, state.m_acc_bias);
+            }
             
         } else {
             // Process LiDAR data
@@ -569,11 +604,22 @@ int main(int argc, char** argv) {
             if (lio::LoadPLYPointCloud(ply_path, cloud)) {
                 lidar_frame_count++;
                 
+                // Measure processing time for this frame
+                auto frame_start = std::chrono::high_resolution_clock::now();
+                
                 // Process with LIO estimator
                 estimator.ProcessLidar(lio::LidarData(lidar.timestamp, cloud));
                 
+                // Measure frame processing time
+                auto frame_end = std::chrono::high_resolution_clock::now();
+                double frame_time_ms = std::chrono::duration<double, std::milli>(frame_end - frame_start).count();
+                total_lidar_processing_time += frame_time_ms;
+                
                 // Get current state from estimator
                 lio::State current_state = estimator.GetCurrentState();
+                
+                // Store trajectory with timestamp
+                trajectory_with_timestamps.push_back({lidar.timestamp, current_state});
                 
                 // Convert state to pose matrix for visualization
                 Eigen::Matrix4f current_pose = Eigen::Matrix4f::Identity();
@@ -582,27 +628,36 @@ int main(int argc, char** argv) {
                 
                 // Get processed (downsampled + range filtered) cloud for visualization
                 lio::PointCloudPtr processed_cloud = estimator.GetProcessedCloud();
-                if (processed_cloud && !processed_cloud->empty()) {
+                if (processed_cloud && !processed_cloud->empty() && !headless_mode) {
                     viewer.UpdatePointCloud(processed_cloud, current_pose);
                 }
                 
-                viewer.AddTrajectoryPoint(current_pose);
-                viewer.UpdateStateInfo(lidar_frame_count, 
-                    processed_cloud ? processed_cloud->size() : 0);
-                
-                // Update map visualization (choose between point cloud or voxel cubes)
-                lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
-                if (map_cloud) {
-                    viewer.UpdateMapPointCloud(map_cloud);
+                if (!headless_mode) {
+                    viewer.AddTrajectoryPoint(current_pose);
+                    viewer.UpdateStateInfo(lidar_frame_count, 
+                        processed_cloud ? processed_cloud->size() : 0);
+                    
+                    // Update map visualization (choose between point cloud or voxel cubes)
+                    lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
+                    if (map_cloud) {
+                        viewer.UpdateMapPointCloud(map_cloud);
+                    }
+                    
+                    // Update voxel map for cube visualization
+                    std::shared_ptr<lio::VoxelMap> voxel_map = estimator.GetVoxelMap();
+                    if (voxel_map) {
+                        viewer.UpdateVoxelMap(voxel_map);
+                    }
                 }
                 
-                // Update voxel map for cube visualization
-                std::shared_ptr<lio::VoxelMap> voxel_map = estimator.GetVoxelMap();
-                if (voxel_map) {
-                    viewer.UpdateVoxelMap(voxel_map);
+                // Print progress every 100 frames
+                if (lidar_frame_count - last_progress_frame >= 100) {
+                    auto current_time = std::chrono::high_resolution_clock::now();
+                    double elapsed = std::chrono::duration<double>(current_time - processing_start).count();
+                    spdlog::info("[Progress] Processed {} LiDAR frames ({:.1f}s elapsed, {:.2f} fps)",
+                                lidar_frame_count, elapsed, lidar_frame_count / elapsed);
+                    last_progress_frame = lidar_frame_count;
                 }
-                
-                
             } else {
                 spdlog::warn("Failed to load LiDAR scan: {}", ply_path);
             }
@@ -617,18 +672,70 @@ int main(int argc, char** argv) {
     spdlog::info("  LiDAR frames: {}", lidar_frame_count);
     spdlog::info("");
     
+    // Calculate total processing time
+    auto processing_end = std::chrono::high_resolution_clock::now();
+    double total_time_s = std::chrono::duration<double>(processing_end - processing_start).count();
+    
+    // Print overall performance statistics
+    spdlog::info("════════════════════════════════════════════════════════════════");
+    spdlog::info("                  PERFORMANCE STATISTICS                        ");
+    spdlog::info("════════════════════════════════════════════════════════════════");
+    if (lidar_frame_count > 0) {
+        double avg_frame_time_ms = total_lidar_processing_time / lidar_frame_count;
+        double avg_fps = 1000.0 / avg_frame_time_ms;
+        spdlog::info("  Total processing time:     {:.3f} seconds", total_time_s);
+        spdlog::info("  LiDAR frames processed:    {}", lidar_frame_count);
+        spdlog::info("  Average frame time:        {:.3f} ms", avg_frame_time_ms);
+        spdlog::info("  Average FPS:               {:.1f} Hz", avg_fps);
+        spdlog::info("  Total LiDAR proc time:     {:.3f} seconds", total_lidar_processing_time / 1000.0);
+    }
+    spdlog::info("════════════════════════════════════════════════════════════════");
+    spdlog::info("");
+    
     // Print processing time statistics
     estimator.PrintProcessingTimeStatistics();
     
-    spdlog::info("Viewer will stay open. Close window to quit.");
+    // Save trajectory to TUM format
+    std::string traj_output_path = dataset_path + "/trajectory_tum.txt";
+    spdlog::info("Saving trajectory to: {}", traj_output_path);
     
-    // Keep viewer open until user closes it
-    while (!viewer.ShouldClose()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::ofstream traj_file(traj_output_path);
+    if (traj_file.is_open()) {
+        // Write TUM format: timestamp x y z qx qy qz qw
+        for (const auto& [timestamp, state] : trajectory_with_timestamps) {
+            // Extract position and rotation
+            const Eigen::Vector3f& position = state.m_position;
+            const Eigen::Matrix3f& rotation = state.m_rotation;
+            
+            // Convert rotation matrix to quaternion
+            Eigen::Quaternionf q(rotation);
+            
+            // Write to file
+            traj_file << std::fixed << std::setprecision(6) << timestamp << " "
+                     << std::setprecision(9) << position.x() << " " << position.y() << " " << position.z() << " "
+                     << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+        }
+        
+        traj_file.close();
+        spdlog::info("✓ Trajectory saved successfully ({} poses)", trajectory_with_timestamps.size());
+    } else {
+        spdlog::error("Failed to open trajectory file: {}", traj_output_path);
     }
+    spdlog::info("");
     
-    viewer.Shutdown();
-    spdlog::info("Viewer closed. Exiting...");
+    if (headless_mode) {
+        spdlog::info("Headless playback completed!");
+    } else {
+        spdlog::info("Viewer will stay open. Close window to quit.");
+        
+        // Keep viewer open until user closes it
+        while (!viewer.ShouldClose()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        
+        viewer.Shutdown();
+        spdlog::info("Viewer closed. Exiting...");
+    }
     
     return 0;
 }

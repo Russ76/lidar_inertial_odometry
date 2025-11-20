@@ -83,12 +83,14 @@ VoxelKey VoxelMap::GetParentKey(const VoxelKey& key) const {
 }
 
 void VoxelMap::RegisterToParent(const VoxelKey& key_L0) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // Get L1 parent and register
     VoxelKey parent_L1 = GetParentKey(key_L0);
     m_voxels_L1[parent_L1].occupied_children.insert(key_L0);
 }
 
 void VoxelMap::UnregisterFromParent(const VoxelKey& key_L0) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // Get L1 parent
     VoxelKey parent_L1 = GetParentKey(key_L0);
     
@@ -105,6 +107,7 @@ void VoxelMap::UnregisterFromParent(const VoxelKey& key_L0) {
 }
 
 void VoxelMap::AddPoint(const Point3D& point) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // Get L0 voxel key for this point
     VoxelKey key = PointToVoxelKey(point, 0);
     
@@ -120,9 +123,9 @@ void VoxelMap::AddPoint(const Point3D& point) {
     int n = voxel_data.point_count;
     
     if (n == 0) {
-        // First point in voxel - initialize with hit_count = 1
+        // First point in voxel - initialize with max_voxel_hit_count
         voxel_data.centroid = point_vec;
-        voxel_data.hit_count = 1;  // Start with 1, will be incremented by UpdateVoxelMap
+        voxel_data.hit_count = m_max_hit_count;  // Initialize with max_voxel_hit_count
         voxel_data.point_count = 1;
     } else {
         // Weighted average: new_centroid = (n * old_centroid + new_point) / (n + 1)
@@ -137,6 +140,7 @@ void VoxelMap::AddPoint(const Point3D& point) {
 }
 
 void VoxelMap::AddPointCloud(const PointCloudPtr& cloud) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     if (!cloud || cloud->empty()) {
         spdlog::warn("[VoxelMap] UpdateVoxelMap called with empty point cloud");
         return;
@@ -172,6 +176,7 @@ std::vector<VoxelKey> VoxelMap::GetNeighborVoxels(const VoxelKey& center, float 
 }
 
 void VoxelMap::Clear() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_voxels_L0.clear();
     m_voxels_L1.clear();
 }
@@ -179,6 +184,8 @@ void VoxelMap::Clear() {
 void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
                                const Eigen::Vector3d& sensor_position,
                                double max_distance, bool is_keyframe) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    
     if (new_cloud->empty()) 
     {
         spdlog::warn("[VoxelMap] UpdateVoxelMap called with empty point cloud");
@@ -281,8 +288,8 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
     // Step 6: Create/update surfels for affected L1 voxels
     auto start_step6 = std::chrono::high_resolution_clock::now();
     const int MIN_OCCUPIED_CHILDREN = 5;  // Minimum 5 occupied L0 voxels required to create surfel
-    const float MAX_PLANARITY_SCORE = 0.05f;  // Consider as planar if sigma_min / sigma_max < 0.1
-    const float MAX_POINT_TO_PLANE_DIST = 0.15f;  // Max distance for incremental update (15cm)
+    const float MAX_PLANARITY_SCORE = 0.1f;  // Consider as planar if sigma_min / sigma_max < 0.1
+    const float MAX_POINT_TO_PLANE_DIST = 0.05f;  // Max distance for incremental update (5cm)
     
     int surfels_created = 0;
     int surfels_skipped = 0;
@@ -352,7 +359,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         // Need at least 5 centroids for stable plane fitting
         if (collected_centroids.size() < 5) {
             node_L1.has_surfel = false;
-            continue;
+            continue;  // Still collecting points, don't delete yet
         }
         
         // Compute centroid
@@ -377,11 +384,21 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         // Planarity check: sigma_min / sigma_max should be small
         float planarity = singular_values(2) / (singular_values(0) + 1e-6f);
         
-        if (planarity > MAX_PLANARITY_SCORE) {
-            // Not planar enough
-            node_L1.has_surfel = false;
-            continue;
-        }
+        // if (planarity > MAX_PLANARITY_SCORE) {
+        //     // Not planar enough - clear all L0 children
+        //     node_L1.has_surfel = false;
+            
+        //     // Clear all L0 children of this L1 voxel (set hit_count to 0)
+        //     for (const VoxelKey& key_L0 : node_L1.occupied_children) {
+        //         auto it_L0 = m_voxels_L0.find(key_L0);
+        //         if (it_L0 != m_voxels_L0.end()) {
+        //             it_L0->second.hit_count = 0;  // Mark for removal
+        //         }
+        //     }
+        //     node_L1.occupied_children.clear();  // Clear children list
+            
+        //     continue;
+        // }
         
         // Extract plane normal (smallest eigenvector)
         Eigen::Vector3f normal = svd.matrixU().col(2);
@@ -411,6 +428,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
 }
 
 std::vector<VoxelKey> VoxelMap::GetOccupiedVoxels() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::vector<VoxelKey> occupied_voxels;
     occupied_voxels.reserve(m_voxels_L0.size());
     
@@ -466,10 +484,12 @@ int VoxelMap::GetVoxelHitCount(const VoxelKey& key) const {
 }
 
 void VoxelMap::MarkVoxelAsHit(const VoxelKey& key) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_hit_voxels[key] = true;
 }
 
 void VoxelMap::ClearHitMarkers() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_hit_voxels.clear();
 }
 
@@ -489,6 +509,7 @@ std::vector<VoxelKey> VoxelMap::GetHitVoxels() const {
 }
 
 std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey>> VoxelMap::GetL1Surfels() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey>> surfels;
     
     for (const auto& pair : m_voxels_L1) {

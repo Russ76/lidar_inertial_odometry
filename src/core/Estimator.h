@@ -168,6 +168,9 @@ public:
         Eigen::Matrix3f R_il = Eigen::Matrix3f::Identity();
         Eigen::Vector3f t_il = Eigen::Vector3f::Zero();
         
+        // Gravity vector (world frame)
+        Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, 0.0f, -9.81f);  // m/s²
+        
         // Processing parameters
         double min_motion_threshold = 0.1;     // m
         int imu_buffer_size = 1000;
@@ -182,8 +185,8 @@ private:
     void UpdateWithLidar(const LidarData& lidar);
     
     /// Find point-to-plane correspondences
-    /// Returns: vector of (p_lidar, plane_normal, plane_d)
-    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>> 
+    /// Returns: vector of (p_lidar, plane_normal, plane_d, scan_index)
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> 
     FindCorrespondences(const PointCloudPtr scan);
     
     /// Update local map with new scan
@@ -197,7 +200,7 @@ private:
                               std::vector<MapPoint>& features);
     
     /// Compute Jacobians for point-to-plane residuals
-    void ComputeLidarJacobians(const std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float>>& correspondences,
+    void ComputeLidarJacobians(const std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>>& correspondences,
                               Eigen::MatrixXf& H,
                               Eigen::VectorXf& residual);
     
@@ -237,6 +240,10 @@ private:
     PointCloudPtr m_processed_cloud;  // Processed (downsampled + range filtered) scan for visualization
     std::shared_ptr<VoxelMap> m_voxel_map;  // Voxel hash map for fast neighbor search
     mutable std::mutex m_map_mutex;
+    
+    // Last correspondences (for map update after initialization)
+    // tuple: (p_lidar, plane_normal, plane_d, scan_index)
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> m_last_correspondences;
     
     // Processing statistics
     mutable std::mutex m_stats_mutex;
