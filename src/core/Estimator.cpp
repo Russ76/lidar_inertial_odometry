@@ -442,8 +442,8 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     VoxelGrid scan_filter;
     scan_filter.SetInputCloud(undistorted_cloud);
     scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));  // Use config voxel size for input scan
-    scan_filter.SetPlanarityFilter(true);  // Enable planarity-based filtering
-    scan_filter.SetPlanarityThreshold(static_cast<float>(m_params.scan_planarity_threshold));  // Use config threshold
+    // scan_filter.SetPlanarityFilter(true);  // Enable planarity-based filtering
+    // scan_filter.SetPlanarityThreshold(static_cast<float>(m_params.scan_planarity_threshold));  // Use config threshold
     scan_filter.Filter(*downsampled_scan);
     auto end_downsample = std::chrono::high_resolution_clock::now();
     double time_downsample = std::chrono::duration<double, std::milli>(end_downsample - start_downsample).count();
@@ -717,6 +717,8 @@ std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>>
 Estimator::FindCorrespondences(const PointCloudPtr scan) {
     std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
     
+
+    m_num_pts_hit_surfels = 0;
     // Check if VoxelMap is available and has points
     if (!m_voxel_map || m_voxel_map->GetPointCount() == 0) {
         spdlog::warn("[Estimator] VoxelMap is empty, no correspondences found");
@@ -795,6 +797,7 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         // Store: (p_lidar, plane_normal_world, plane_d, scan_index)
         correspondences.emplace_back(p_lidar, surfel_normal, plane_d, i);
         valid_correspondences++;
+        m_num_pts_hit_surfels++;
     }
     
  
@@ -821,7 +824,10 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
         m_first_keyframe = false;
         m_last_keyframe_position = t_wb;
         m_last_keyframe_rotation = R_wb;
-    } else {
+        m_num_pts_hit_surfels_last = m_num_pts_hit_surfels;
+    } 
+    else 
+    {
         // Compute relative transformation T_delta = T_last^-1 * T_current
         // T_last = [R_last, t_last; 0, 1]
         // T_current = [R_wb, t_wb; 0, 1]
@@ -847,12 +853,34 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
         Eigen::AngleAxisf angle_axis(R_delta);
         float rotation_deg = std::abs(angle_axis.angle()) * 180.0f / M_PI;
 
-        if (translation >= m_params.keyframe_translation_threshold || 
-            rotation_deg >= m_params.keyframe_rotation_threshold) {
+        if (translation >= static_cast<float>(m_params.keyframe_translation_threshold) || 
+            rotation_deg >= static_cast<float>(m_params.keyframe_rotation_threshold)) {
+
             is_keyframe = true;
             m_last_keyframe_position = t_wb;
             m_last_keyframe_rotation = R_wb;
         }
+
+        // unsigned int num_surfels = m_voxel_map->GetL1Surfels().size();
+
+
+
+        //     spdlog::info("[Estimator] Keyframe due to drop in surfel hits: last {}, current {}", m_num_pts_hit_surfels_last, m_num_pts_hit_surfels);
+
+        //     is_keyframe = true;
+
+        // // if(m_num_pts_hit_surfels < m_num_pts_hit_surfels_last* 0.95)
+        // // {
+        // //     m_num_pts_hit_surfels_last = m_num_pts_hit_surfels;
+        // //     is_keyframe = true;
+        // // }
+
+        // // if(m_num_pts_hit_surfels_last == 0)
+        // // {
+        // //     m_num_pts_hit_surfels_last = m_num_pts_hit_surfels;
+        // // }
+
+   
     }
     
     // ===== Add new scan to map (only for keyframes) =====
@@ -905,6 +933,9 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     
     auto end_total = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
+
+    
+
 }
 
 void Estimator::CleanLocalMap() {

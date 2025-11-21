@@ -234,6 +234,9 @@ private:
     bool m_initialized;
     double m_last_update_time;
     int m_frame_count;
+
+    unsigned int m_num_pts_hit_surfels = 0;
+    unsigned int m_num_pts_hit_surfels_last = 0;
     
     // Data buffers (thread-safe)
     mutable std::mutex m_state_mutex;
@@ -274,6 +277,7 @@ private:
     // Keyframe management
     Eigen::Vector3f m_last_keyframe_position;
     Eigen::Matrix3f m_last_keyframe_rotation;
+
     bool m_first_keyframe;
     
     // Probabilistic Kernel Optimization

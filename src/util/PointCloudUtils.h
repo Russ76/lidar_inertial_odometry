@@ -348,11 +348,11 @@ bool SavePointCloudPly(const std::string& filename, const PointCloud::ConstPtr& 
 class VoxelGrid {
 public:
     VoxelGrid() 
-        : m_leaf_size(0.01f)
+        : m_leaf_size(0.4f)
         , m_planarity_threshold(0.1f)  // Default: relaxed threshold for downsampling
                                         // Can be overridden via SetPlanarityThreshold()
                                         // Config file: scan_planarity_threshold (0.1f)
-        , m_enable_planarity_filter(true)
+        , m_enable_planarity_filter(false)
     {}
     
     void SetLeafSize(float size) { m_leaf_size = size; }
