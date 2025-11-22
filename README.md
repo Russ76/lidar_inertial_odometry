@@ -46,26 +46,54 @@ This will:
 
 ### Quick Start
 
-**Livox AVIA Dataset**:
+#### M3DGR Dataset (Recommended)
+
+**Download Pre-processed Dataset**:
+- **Google Drive**: [M3DGR Parsed Dataset](https://drive.google.com/drive/folders/1zOmvw3sCwRQ0LHo1b-jhY21L693GmOfW?usp=sharing)
+- **Source**: [M3DGR Dataset](https://github.com/SJTU-ViSYS/M3DGR)
+- **Sensors**: Livox Avia / Mid-360 LiDAR + Built-in IMU
+
+**Running Single Sequence**:
+```bash
+cd build
+
+# Livox Avia
+./lio_player ../config/avia.yaml /path/to/M3DGR/Dynamic03/avia
+
+# Livox Mid-360
+./lio_player ../config/mid360.yaml /path/to/M3DGR/Dynamic03/mid360
+```
+
+**Dataset Structure**:
+```
+M3DGR/
+├── Dynamic03/
+│   ├── avia/
+│   │   ├── imu_data.csv
+│   │   ├── lidar_timestamps.txt
+│   │   └── lidar/
+│   │       ├── 0000000000.pcd
+│   │       ├── 0000000001.pcd
+│   │       └── ...
+│   └── mid360/
+│       └── (same structure)
+├── Dynamic04/
+├── Occlusion03/
+├── Occlusion04/
+├── Outdoor01/
+└── Outdoor04/
+```
+
+#### Other Datasets
+
+**R3LIVE Dataset** (Alternative):
 - **Download**: [Google Drive Link](https://drive.google.com/file/d/1NPtqg34vdAM-BMdqQ_pfRgVvzVVRuXd6/view?usp=sharing)
 - **Source**: [R3LIVE Dataset](https://github.com/hku-mars/r3live)
 - **Sensor**: Livox Avia LiDAR + Built-in IMU
 
-
 ```bash
 cd build
 ./lio_player ../config/avia.yaml /home/user/data/R3LIVE/hku_main_building
-```
-
-**Livox Mid-360 Dataset** :
-- **Download**: [Google Drive Link](https://drive.google.com/file/d/1VuzTaSFqwiK6E8N19AOB-KV6xgEf4554/view?usp=sharing)
-- **Source**: https://www.youtube.com/watch?v=u8siB0KLFLc
-- **Sensor**: Livox Mid-360 LiDAR + Built-in IMU
-
-
-```bash
-cd build
-./lio_player ../config/mid360.yaml /path/to/mid360_dataset
 ```
 
 ## Project Structure
