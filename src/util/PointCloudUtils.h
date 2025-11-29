@@ -21,6 +21,7 @@
 #include <string>
 #include <map>
 #include <Eigen/Dense>
+#include "unordered_dense.h"  // Fast hash map
 
 namespace lio {
 
@@ -448,6 +449,29 @@ private:
             if (x != other.x) return x < other.x;
             if (y != other.y) return y < other.y;
             return z < other.z;
+        }
+        
+        bool operator==(const VoxelKey& other) const {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+    
+    // Z-order (Morton code) hash for VoxelKey - preserves spatial locality
+    struct VoxelKeyHash {
+    private:
+        static inline uint64_t ExpandBits(int32_t v) {
+            uint64_t x = static_cast<uint64_t>(v + (1 << 20)) & 0x1fffff;
+            x = (x | (x << 32)) & 0x1f00000000ffffULL;
+            x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
+            x = (x | (x << 8))  & 0x100f00f00f00f00fULL;
+            x = (x | (x << 4))  & 0x10c30c30c30c30c3ULL;
+            x = (x | (x << 2))  & 0x1249249249249249ULL;
+            return x;
+        }
+    public:
+        std::size_t operator()(const VoxelKey& key) const {
+            uint64_t morton = ExpandBits(key.x) | (ExpandBits(key.y) << 1) | (ExpandBits(key.z) << 2);
+            return static_cast<std::size_t>(morton);
         }
     };
     

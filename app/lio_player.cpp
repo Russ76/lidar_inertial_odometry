@@ -421,7 +421,7 @@ int main(int argc, char** argv) {
         viewer.SetShowPointCloud(config.viewer.show_point_cloud);
         viewer.SetShowTrajectory(config.viewer.show_trajectory);
         viewer.SetShowCoordinateFrame(config.viewer.show_coordinate_frame);
-        viewer.SetShowMap(config.viewer.show_map);
+        viewer.SetShowL1Voxel(config.viewer.show_map);
         viewer.SetShowVoxelCubes(config.viewer.show_voxel_cubes);
         viewer.SetAutoPlayback(config.viewer.auto_playback);
         

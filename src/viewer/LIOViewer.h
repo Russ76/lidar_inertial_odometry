@@ -172,9 +172,9 @@ public:
     void SetShowCoordinateFrame(bool show) { m_show_coordinate_frame = show; }
     
     /**
-     * @brief Set show map flag
+     * @brief Set show L1 voxel flag
      */
-    void SetShowMap(bool show) { m_show_map = show; }
+    void SetShowL1Voxel(bool show) { m_show_L1_voxel = show; }
     
     /**
      * @brief Set show voxel cubes flag
@@ -218,7 +218,8 @@ private:
     pangolin::Var<bool> m_show_point_cloud;            ///< Show point cloud checkbox
     pangolin::Var<bool> m_show_trajectory;             ///< Show trajectory checkbox
     pangolin::Var<bool> m_show_coordinate_frame;       ///< Show coordinate frame checkbox
-    pangolin::Var<bool> m_show_map;                    ///< Show map checkbox
+    pangolin::Var<bool> m_show_L1_voxel;               ///< Show L1 voxel cubes checkbox
+    pangolin::Var<bool> m_show_map_points;             ///< Show surfel centroids as green points
     pangolin::Var<bool> m_show_voxel_cubes;            ///< Show voxel cubes checkbox
     pangolin::Var<bool> m_show_surfels;                ///< Show L1 surfels checkbox
     pangolin::Var<bool> m_auto_playback;               ///< Auto playback mode
@@ -281,6 +282,12 @@ private:
      * @param voxel_map Voxel map containing L1 data
      */
     void DrawL1VoxelCubes(std::shared_ptr<VoxelMap> voxel_map);
+    
+    /**
+     * @brief Draw surfel centroids as green points
+     * @param voxel_map Voxel map containing surfel data
+     */
+    void DrawMapPoints(std::shared_ptr<VoxelMap> voxel_map);
     
     /**
      * @brief Draw L1 surfels with normal vectors

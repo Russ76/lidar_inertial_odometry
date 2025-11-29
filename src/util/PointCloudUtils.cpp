@@ -81,8 +81,8 @@ void VoxelGrid::Filter(PointCloud& output) {
     // Note: This is only for downsampling, not actual VoxelMap structure
     const float l2_size = m_leaf_size * 5;
     
-    // Step 1: Group points into L2 voxels first
-    std::map<VoxelKey, std::vector<Point3D>> l2_voxel_map;
+    // Step 1: Group points into L2 voxels first (using fast hash map)
+    ankerl::unordered_dense::map<VoxelKey, std::vector<Point3D>, VoxelKeyHash> l2_voxel_map;
     
     for (size_t i = 0; i < m_input_cloud->size(); ++i) {
         const Point3D& point = m_input_cloud->at(i);
@@ -94,11 +94,11 @@ void VoxelGrid::Filter(PointCloud& output) {
     }
     
     // Step 2: For each L2 with >1 point, subdivide into L0 voxels
-    std::map<VoxelKey, VoxelPoints> l0_voxel_map;
+    ankerl::unordered_dense::map<VoxelKey, VoxelPoints, VoxelKeyHash> l0_voxel_map;
     
     for (auto& l2_voxel : l2_voxel_map) {
         // Skip isolated L2 voxels (only 1 point = noise)
-        if (l2_voxel.second.size() < 2) {
+        if (l2_voxel.second.size() == 0 ) {
             continue;
         }
         
@@ -112,37 +112,11 @@ void VoxelGrid::Filter(PointCloud& output) {
     output.clear();
     output.reserve(l0_voxel_map.size());
     
-    size_t total_voxels = l0_voxel_map.size();
-    size_t planar_voxels = 0;
-    float min_planarity = 1.0f;
-    float max_planarity = 0.0f;
-    float sum_planarity = 0.0f;
-    
     // Step 3: Process each L0 voxel
     for (auto& voxel : l0_voxel_map) {
-        const VoxelKey& key = voxel.first;
         VoxelPoints& voxel_points = voxel.second;
         
-        // If planarity filtering is enabled, check planarity
-        if (m_enable_planarity_filter) {
-            float planarity = voxel_points.CalculatePlanarity();
-            
-            // Track statistics
-            min_planarity = std::min(min_planarity, planarity);
-            max_planarity = std::max(max_planarity, planarity);
-            sum_planarity += planarity;
-            
-            // Only output centroid if planarity is below threshold (more planar)
-            if (planarity > m_planarity_threshold) {
-                // Non-planar voxel - skip it
-                continue;
-            }
-            
-            planar_voxels++;
-        } else {
-            planar_voxels++;
-        }
-        
+     
         // Extract and add centroid to output
         output.push_back(voxel_points.GetCentroid());
     }

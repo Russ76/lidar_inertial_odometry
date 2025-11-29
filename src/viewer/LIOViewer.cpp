@@ -26,12 +26,13 @@ LIOViewer::LIOViewer()
     , m_show_point_cloud("ui.1. Show Point Cloud", true, true)
     , m_show_trajectory("ui.2. Show Trajectory", true, true)
     , m_show_coordinate_frame("ui.3. Show Coordinate Frame", true, true)
-    , m_show_map("ui.4. Show L1 Voxels", true, true)  // Show valid L1 voxel cubes
-    , m_show_voxel_cubes("ui.5. Show L0 Voxels", false, true)  // Show L0 voxel cubes (heavy)
-    , m_show_surfels("ui.6. Show Surfels", false, true)  // Show surfel discs with normals
-    , m_auto_playback("ui.7. Auto Playback", true, true)  // Enable auto playback by default
-    , m_step_forward_button("ui.8. Step Forward", false, false)
-    , m_follow_mode("ui.9. Follow Mode (Top-Down)", true, true)  // Enable follow mode with mouse zoom support
+    , m_show_L1_voxel("ui.4. Show L1 Voxels", false, true)  // Show valid L1 voxel cubes
+    , m_show_map_points("ui.5. Show Map Points", true, true)  // Show surfel centroids as green points (default ON)
+    , m_show_voxel_cubes("ui.6. Show L0 Voxels", false, true)  // Show L0 voxel cubes (heavy)
+    , m_show_surfels("ui.7. Show Surfels", false, true)  // Show surfel discs with normals
+    , m_auto_playback("ui.8. Auto Playback", true, true)  // Enable auto playback by default
+    , m_step_forward_button("ui.9. Step Forward", false, false)
+    , m_follow_mode("ui.10. Follow Mode (Top-Down)", true, true)  // Enable follow mode with mouse zoom support
     , m_frame_id("info.Frame ID", 0)
     , m_total_points("info.Total Points", 0)
     , m_point_size(2.0f)
@@ -335,8 +336,12 @@ void LIOViewer::RenderLoop() {
             DrawVoxelCubes(voxel_map_copy);  // Draw L0 voxel cubes (heavy)
         }
         
-        if (m_show_map.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+        if (m_show_L1_voxel.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
             DrawL1VoxelCubes(voxel_map_copy);  // Draw L1 voxel cubes (lightweight)
+        }
+        
+        if (m_show_map_points.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+            DrawMapPoints(voxel_map_copy);  // Draw surfel centroids as green points
         }
         
         if (m_show_surfels.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
@@ -637,65 +642,63 @@ void LIOViewer::DrawL1VoxelCubes(std::shared_ptr<VoxelMap> voxel_map) {
         return;
     }
     
-    // L1 voxel size = hierarchy_factor × L0 voxel size
+    // L1 voxel size
     float l1_voxel_size = voxel_map->GetVoxelSize() * voxel_map->GetHierarchyFactor();
     
-    // Find z min/max for color mapping
-    float z_min = std::numeric_limits<float>::max();
-    float z_max = std::numeric_limits<float>::lowest();
+    // Draw L1 voxel cubes as wireframes
+    glColor4f(0.0f, 0.8f, 0.2f, 0.5f);  // Green wireframe
+    glLineWidth(1.0f);
     
     for (const auto& surfel_data : surfels) {
-        const Eigen::Vector3f& centroid = std::get<0>(surfel_data);
-        z_min = std::min(z_min, centroid.z());
-        z_max = std::max(z_max, centroid.z());
+        const VoxelKey& key_L1 = std::get<3>(surfel_data);
+        
+        // Calculate L1 voxel center
+        Eigen::Vector3f center(
+            (key_L1.x + 0.5f) * l1_voxel_size,
+            (key_L1.y + 0.5f) * l1_voxel_size,
+            (key_L1.z + 0.5f) * l1_voxel_size
+        );
+        
+        DrawCube(center, l1_voxel_size);
+    }
+}
+
+void LIOViewer::DrawMapPoints(std::shared_ptr<VoxelMap> voxel_map) {
+    if (!voxel_map) return;
+    
+    // Get all L1 surfels
+    auto surfels = voxel_map->GetL1Surfels();
+    
+    if (surfels.empty()) {
+        return;
     }
     
-    float z_range = z_max - z_min;
-    if (z_range < 0.01f) z_range = 0.01f;
+    // Get max hit count for alpha normalization
+    int max_hit_count = voxel_map->GetMaxHitCount();
     
-    // Enable blending for transparency
+    // Enable blending for alpha
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glLineWidth(1.0f);
+    
+    // Draw surfel centroids as green points with alpha based on hit_count
+    glPointSize(3.0f);
+    glBegin(GL_POINTS);
     
     for (const auto& surfel_data : surfels) {
         const Eigen::Vector3f& centroid = std::get<0>(surfel_data);
-        float planarity = std::get<2>(surfel_data);
+        int hit_count = std::get<4>(surfel_data);
         
-        // Calculate color based on z height (jet colormap)
-        float normalized_z = (centroid.z() - z_min) / z_range;
-        float r, g, b;
+        // Alpha: 0.2 (min) to 1.0 (max) based on hit_count
+        float alpha = 0.2f + 0.8f * (static_cast<float>(hit_count) / static_cast<float>(max_hit_count));
+        alpha = std::min(1.0f, std::max(0.2f, alpha));
         
-        // Jet colormap: blue -> cyan -> green -> yellow -> red
-        if (normalized_z < 0.25f) {
-            r = 0.0f;
-            g = 4.0f * normalized_z;
-            b = 1.0f;
-        } else if (normalized_z < 0.5f) {
-            r = 0.0f;
-            g = 1.0f;
-            b = 1.0f - 4.0f * (normalized_z - 0.25f);
-        } else if (normalized_z < 0.75f) {
-            r = 4.0f * (normalized_z - 0.5f);
-            g = 1.0f;
-            b = 0.0f;
-        } else {
-            r = 1.0f;
-            g = 1.0f - 4.0f * (normalized_z - 0.75f);
-            b = 0.0f;
-        }
-        
-        // Alpha based on planarity (more planar = more opaque)
-        float alpha = 1.0f - (planarity / 0.1f);
-        alpha = std::max(0.3f, std::min(0.8f, alpha));
-        
-        // Draw wireframe cube at L1 voxel position
-        glColor4f(r, g, b, alpha);
-        DrawCube(centroid, l1_voxel_size);
+        // Green color with alpha based on hit_count
+        glColor4f(0.0f, 1.0f, 0.0f, alpha);
+        glVertex3f(centroid.x(), centroid.y(), centroid.z());
     }
     
-    glDisable(GL_BLEND);
-    glLineWidth(1.0f);
+    glEnd();
+    glPointSize(1.0f);
 }
 
 void LIOViewer::DrawSurfels(std::shared_ptr<VoxelMap> voxel_map) {

@@ -32,13 +32,13 @@ estimator:
   max_iterations: 4         # Maximum Gauss-Newton iterations
   convergence_threshold: 0.005 # Convergence threshold for optimization
 
-  scan_planarity_threshold: 0.05  # Planarity threshold for input scan downsampling (relaxed)
-  map_planarity_threshold: 0.05  # Planarity threshold for VoxelMap surfel creation
+  map_planarity_threshold: 0.1  # Planarity threshold for VoxelMap surfel creation
 
   # Local map parameters
-  min_distance: 0.5             # Minimum distance for lidar filtering (meters)
+  min_distance: 1.0             # Minimum distance for lidar filtering (meters)
   max_distance: 100.0           # Maximum distance for lidar filtering (meters)
-  max_voxel_hit_count: 100       # Maximum hit count for voxel occupancy (1-N, default: 10)
+  max_voxel_hit_count: 1000     # Maximum hit count for voxel occupancy (1-N, default: 10)
+  init_hit_count: 1000            # Initial hit count when adding new points to voxel
   voxel_hierarchy_factor: 3      # L1 voxel factor: L1 = factor × L0 (e.g., 3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7)
 
   # Keyframe parameters (distance/rotation based)
@@ -79,9 +79,8 @@ playback:
 
 
 imu:
-  gyr_cov: 1e-4             # Gyroscope noise covariance [rad/s]
+  gyr_cov: 1e-4              # Gyroscope noise covariance [rad/s]
   acc_cov: 1e-2               # Accelerometer noise covariance [m/s^2]
-  b_gyr_cov: 1e-10         # Gyroscope bias covariance [rad/s]
-  b_acc_cov: 1e-8          # Accelerometer bias covariance [m/s^2]
+  b_gyr_cov: 1e-8         # Gyroscope bias covariance [rad/s]
+  b_acc_cov: 1e-6          # Accelerometer bias covariance [m/s^2]
   gravity: [0.0, 0.0, -9.81]  # Gravity vector [m/s^2]
-

@@ -72,9 +72,9 @@ Estimator::Estimator()
     // Initialize Probabilistic Kernel Optimizer
     PKOConfig pko_config;
     pko_config.use_adaptive = true;
-    pko_config.min_scale_factor = 0.01;
+    pko_config.min_scale_factor = 0.001;
     pko_config.max_scale_factor = 10.0;
-    pko_config.num_alpha_segments = 10;
+    pko_config.num_alpha_segments = 100;
     pko_config.truncated_threshold = 10.0;
     pko_config.gmm_components = 2;
     pko_config.gmm_sample_size = 100;
@@ -589,15 +589,15 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     
     // Last correspondences found (for map update after loop)
     std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
-    
-    for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++) {
+
+    for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++)
+    {
 
         if (m_pko)
         {
             m_pko->Reset();
         }
 
-       
         // OUTER LOOP: Find correspondences at current state (expensive, ~50ms)
         auto start_corr = std::chrono::high_resolution_clock::now();
 
@@ -762,7 +762,6 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
         
         // If inner loop didn't converge or this is first outer iteration, continue to re-linearize
     }
-    
 
     m_last_correspondences = correspondences;
 

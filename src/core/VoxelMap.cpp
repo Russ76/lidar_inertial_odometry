@@ -15,7 +15,6 @@
 #include <cmath>
 #include <limits>
 #include <queue>
-#include <unordered_set>
 #include <spdlog/spdlog.h>
 
 namespace lio {
@@ -211,8 +210,8 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
 
     // Step 2: Mark L0 voxels - L1-based efficient marking
     auto start_step2 = std::chrono::high_resolution_clock::now();
-    std::unordered_set<VoxelKey, VoxelKeyHash> hit_voxels_L0_set;
-    std::unordered_set<VoxelKey, VoxelKeyHash> hit_L1_set;
+    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> hit_voxels_L0_set;
+    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> hit_L1_set;
     
     // First, collect all L1 voxels containing the new points
     for (const auto& pt : *new_cloud) {
@@ -271,7 +270,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
     
     // Step 5: Update L1 hit counts based on affected parents
     auto start_step5 = std::chrono::high_resolution_clock::now();
-    std::unordered_set<VoxelKey, VoxelKeyHash> affected_L1;
+    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> affected_L1;
     
     for (const VoxelKey& hit_L0 : hit_voxels_L0_set) {
         VoxelKey parent_L1 = GetParentKey(hit_L0);
@@ -368,18 +367,18 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         // Compute planarity score for statistics
         float planarity = singular_values(2) / (singular_values(0) + 1e-6f);
 
-        if(planarity > m_planarity_threshold && current_child_count > 10)
+        if(planarity > m_planarity_threshold)
         {
             // Not planar enough - delete L1 and all its L0 children immediately
             node_L1.has_surfel = false;
             
-            // Delete all L0 children from m_voxels_L0
-            for (const VoxelKey& key_L0 : node_L1.occupied_children) {
-                m_voxels_L0.erase(key_L0);
-            }
+            // // Delete all L0 children from m_voxels_L0
+            // for (const VoxelKey& key_L0 : node_L1.occupied_children) {
+            //     m_voxels_L0.erase(key_L0);
+            // }
             
-            // Erase L1 voxel itself
-            m_voxels_L1.erase(it_L1);
+            // // Erase L1 voxel itself
+            // m_voxels_L1.erase(it_L1);
             
             continue;
         }
@@ -480,16 +479,16 @@ std::vector<VoxelKey> VoxelMap::GetHitVoxels() const {
     return hit_voxels;
 }
 
-std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey>> VoxelMap::GetL1Surfels() const {
+std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey, int>> VoxelMap::GetL1Surfels() const {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey>> surfels;
+    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, VoxelKey, int>> surfels;
     
     for (const auto& pair : m_voxels_L1) {
         const VoxelKey& key = pair.first;
         const VoxelNode_L1& node = pair.second;
         
         if (node.has_surfel) {
-            surfels.emplace_back(node.surfel_centroid, node.surfel_normal, node.planarity_score, key);
+            surfels.emplace_back(node.surfel_centroid, node.surfel_normal, node.planarity_score, key, node.hit_count);
         }
     }
     

@@ -10,6 +10,7 @@ set(CMAKE_BUILD_TYPE Release)
 find_package(Eigen3 REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # Use Pangolin from thirdparty
 set(Pangolin_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/pangolin)
@@ -20,6 +21,9 @@ link_directories(${Pangolin_DIR}/build)
 # Use spdlog from thirdparty (header-only)
 set(spdlog_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog/include)
 include_directories(${spdlog_DIR})
+
+# Use unordered_dense from thirdparty (header-only, fast hash map)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/unordered_dense)
 
 # Include directories
 include_directories(src)
@@ -51,6 +55,7 @@ target_link_libraries(lio_viewer
     pango_core
     GLEW::GLEW
     GL
+    OpenMP::OpenMP_CXX
 )
 
 # Main LIO player executable
