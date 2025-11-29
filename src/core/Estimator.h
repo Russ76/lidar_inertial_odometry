@@ -164,6 +164,7 @@ public:
         double voxel_size = 0.4;              // m (voxel size for downsampling and VoxelMap)
         double map_voxel_size = 0.2;          // m (deprecated, use voxel_size)
         int max_map_points = 100000;
+        double min_range = 0.5;               // m (minimum range for point filtering)
         double max_map_distance = 50.0;       // m
         int max_voxel_hit_count = 10;         // Maximum hit count for voxel occupancy
         int voxel_hierarchy_factor = 3;       // L1 voxel factor: L1 = factor × L0 (3, 5, 7, etc.)

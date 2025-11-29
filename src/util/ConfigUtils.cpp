@@ -35,6 +35,7 @@ void SetDefaultConfig(LIOConfig& config) {
     config.estimator.convergence_threshold = 1e-4;
     config.estimator.scan_planarity_threshold = 0.1;  // Relaxed threshold for input scan downsampling
     config.estimator.map_planarity_threshold = 0.01;  // Strict threshold for VoxelMap surfel
+    config.estimator.min_distance = 0.5;
     config.estimator.max_distance = 50.0;
     config.estimator.max_voxel_hit_count = 10;
     config.estimator.voxel_hierarchy_factor = 3;  // Default: 3×3×3 (L1 = 3 × L0)
@@ -63,10 +64,10 @@ void SetDefaultConfig(LIOConfig& config) {
     config.playback.playback_speed = 5.0;
     
     // IMU parameters (typical values for consumer IMU)
-    config.imu.gyro_noise_density = 1.75e-4;
-    config.imu.acc_noise_density = 1.86e-3;
-    config.imu.gyro_bias_random_walk = 1.87e-5;
-    config.imu.acc_bias_random_walk = 4.33e-4;
+    config.imu.gyr_cov = 1.75e-4;
+    config.imu.acc_cov = 1.86e-3;
+    config.imu.b_gyr_cov = 1.87e-5;
+    config.imu.b_acc_cov = 4.33e-4;
     config.imu.gravity << 0.0, 0.0, -9.81;
     
     // Extrinsics (R3LIVE/Avia dataset default values)
@@ -119,6 +120,8 @@ bool LoadConfig(const std::string& config_path, LIOConfig& config) {
                 config.estimator.max_iterations = estimator["max_iterations"].as<int>();
             if (estimator["convergence_threshold"]) 
                 config.estimator.convergence_threshold = estimator["convergence_threshold"].as<double>();
+            if (estimator["min_distance"]) 
+                config.estimator.min_distance = estimator["min_distance"].as<double>();
             if (estimator["max_distance"]) 
                 config.estimator.max_distance = estimator["max_distance"].as<double>();
             if (estimator["max_voxel_hit_count"]) 
@@ -188,14 +191,14 @@ bool LoadConfig(const std::string& config_path, LIOConfig& config) {
         // Load IMU parameters
         if (yaml_config["imu"]) {
             auto imu = yaml_config["imu"];
-            if (imu["gyro_noise_density"]) 
-                config.imu.gyro_noise_density = imu["gyro_noise_density"].as<double>();
-            if (imu["acc_noise_density"]) 
-                config.imu.acc_noise_density = imu["acc_noise_density"].as<double>();
-            if (imu["gyro_bias_random_walk"]) 
-                config.imu.gyro_bias_random_walk = imu["gyro_bias_random_walk"].as<double>();
-            if (imu["acc_bias_random_walk"]) 
-                config.imu.acc_bias_random_walk = imu["acc_bias_random_walk"].as<double>();
+            if (imu["gyr_cov"]) 
+                config.imu.gyr_cov = imu["gyr_cov"].as<double>();
+            if (imu["acc_cov"]) 
+                config.imu.acc_cov = imu["acc_cov"].as<double>();
+            if (imu["b_gyr_cov"]) 
+                config.imu.b_gyr_cov = imu["b_gyr_cov"].as<double>();
+            if (imu["b_acc_cov"]) 
+                config.imu.b_acc_cov = imu["b_acc_cov"].as<double>();
             if (imu["gravity"]) {
                 auto gravity = imu["gravity"];
                 config.imu.gravity << gravity[0].as<double>(), 

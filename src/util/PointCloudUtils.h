@@ -374,6 +374,12 @@ public:
      */
     void SetPlanarityThreshold(float threshold) { m_planarity_threshold = threshold; }
     
+    /**
+     * @brief Set hierarchy factor for L1 voxel size
+     * @param factor L1 voxel size = L0 size × factor (e.g., 5 means 5×5×5 L0 voxels per L1)
+     */
+    void SetHierarchyFactor(int factor) { m_hierarchy_factor = factor; }
+    
     void Filter(PointCloud& output);
     
 private:
@@ -455,6 +461,7 @@ private:
     float m_leaf_size;
     float m_planarity_threshold;
     bool m_enable_planarity_filter;
+    int m_hierarchy_factor = 5;  // L1 = factor × L0
     PointCloud::ConstPtr m_input_cloud;
 };
 

@@ -244,7 +244,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             }
         } else {
             // Voxel is not hit -> decrement hit count by 1
-            voxel_data.hit_count--;
+            voxel_data.hit_count-=2;
             
             // Mark for removal if hit count drops below 1
             if (voxel_data.hit_count < 1) {
@@ -288,7 +288,6 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
     // Step 6: Create/update surfels for affected L1 voxels
     auto start_step6 = std::chrono::high_resolution_clock::now();
     const int MIN_OCCUPIED_CHILDREN = 5;  // Minimum 5 occupied L0 voxels required to create surfel
-    const float MAX_POINT_TO_PLANE_DIST = 0.05f;  // Max distance for incremental update (5cm, strict for map quality)
     
     int surfels_created = 0;
     int surfels_skipped = 0;
@@ -305,42 +304,25 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             node_L1.has_surfel = false;
             continue;
         }
-        
+
         // === INCREMENTAL UPDATE: Check if existing surfel is still valid ===
-        if (node_L1.has_surfel) {
+        if (node_L1.has_surfel)
+        {
+            
             // Check if geometry changed significantly
             int child_count_change = std::abs(current_child_count - node_L1.last_child_count);
-            
+
             // If child count didn't change much, check point-to-plane distances
-            if (child_count_change <= 2) {
-                bool all_points_close = true;
-                float max_dist = 0.0f;
-                
-                // Check all L0 centroids against existing surfel plane
-                for (const VoxelKey& key_L0 : node_L1.occupied_children) {
-                    auto it_L0 = m_voxels_L0.find(key_L0);
-                    if (it_L0 == m_voxels_L0.end()) continue;
-                    
-                    // Point-to-plane distance: |n · (p - c)|
-                    Eigen::Vector3f diff = it_L0->second.centroid - node_L1.surfel_centroid;
-                    float dist = std::abs(node_L1.surfel_normal.dot(diff));
-                    max_dist = std::max(max_dist, dist);
-                    
-                    if (dist > MAX_POINT_TO_PLANE_DIST) {
-                        all_points_close = false;
-                        break;
-                    }
-                }
-                
-                // If all points are close, skip SVD (surfel is still valid)
-                if (all_points_close) {
-                    surfels_skipped++;
-                    surfels_created++;  // Count as "created" for statistics
-                    continue;
-                }
+            if (child_count_change == 0)
+            {
+
+                surfels_skipped++;
+                surfels_created++; // Count as "created" for statistics
+                continue;
             }
+            // continue;
         }
-        
+
         // === FULL UPDATE: Recompute surfel with SVD ===
         
         // Collect centroids from occupied L0 children
@@ -355,12 +337,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             collected_centroids.push_back(it_L0->second.centroid);
         }
         
-        // Need at least 5 centroids for stable plane fitting
-        if (collected_centroids.size() < 5) {
-            node_L1.has_surfel = false;
-            continue;  // Still collecting points, don't delete yet
-        }
-        
+    
         // Compute centroid
         Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
         for (const auto& pt : collected_centroids) {
@@ -380,10 +357,14 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         Eigen::JacobiSVD<Eigen::Matrix3f> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
         Eigen::Vector3f singular_values = svd.singularValues();
         
-        // Planarity check: sigma_min / sigma_max should be small
+        // Extract plane normal (smallest eigenvector)
+        Eigen::Vector3f normal = svd.matrixU().col(2);
+       
+        // Compute planarity score for statistics
         float planarity = singular_values(2) / (singular_values(0) + 1e-6f);
-        
-        if (planarity > m_planarity_threshold) {
+
+        if(planarity > m_planarity_threshold)
+        {
             // Not planar enough - clear all L0 children
             node_L1.has_surfel = false;
             
@@ -398,14 +379,9 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             
             continue;
         }
-        
-        // Extract plane normal (smallest eigenvector)
-        Eigen::Vector3f normal = svd.matrixU().col(2);
-        
-        // Ensure consistent normal orientation (pointing upward if possible)
-        if (normal.z() < 0) {
-            normal = -normal;
-        }
+       
+       
+      
         
         // Create surfel and update last child count
         node_L1.has_surfel = true;
@@ -415,6 +391,7 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         node_L1.planarity_score = planarity;
         node_L1.last_child_count = current_child_count;
         surfels_created++;
+        
     }
     auto end_step6 = std::chrono::high_resolution_clock::now();
     double time_step6 = std::chrono::duration<double, std::milli>(end_step6 - start_step6).count();

@@ -284,8 +284,9 @@ private:
         Eigen::Vector3f centroid;
         int hit_count;
         int point_count;  // Number of points used to compute centroid
+        bool centroid_dirty;  // True if centroid was updated since last surfel computation
         
-        VoxelNode_L0() : centroid(Eigen::Vector3f::Zero()), hit_count(1), point_count(0) {}
+        VoxelNode_L0() : centroid(Eigen::Vector3f::Zero()), hit_count(1), point_count(0), centroid_dirty(true) {}
     };
     std::unordered_map<VoxelKey, VoxelNode_L0, VoxelKeyHash> m_voxels_L0;
     

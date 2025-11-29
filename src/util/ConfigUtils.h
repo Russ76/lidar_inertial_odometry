@@ -44,6 +44,7 @@ struct LIOConfig {
         double map_planarity_threshold;   // Planarity threshold for VoxelMap surfel creation (strict)
         
         // Local map parameters
+        double min_distance;            // Minimum distance for lidar filtering (meters)
         double max_distance;            // Maximum distance for map points (meters)
         int max_voxel_hit_count;        // Maximum hit count for voxel occupancy (1-N)
         int voxel_hierarchy_factor;     // L1 voxel factor: L1 = factor × L0 (3 = 3×3×3, 5 = 5×5×5, etc.)
@@ -80,10 +81,10 @@ struct LIOConfig {
     
     // IMU parameters
     struct IMUParams {
-        double gyro_noise_density;      // rad/s/sqrt(Hz)
-        double acc_noise_density;       // m/s^2/sqrt(Hz)
-        double gyro_bias_random_walk;   // rad/s^2/sqrt(Hz)
-        double acc_bias_random_walk;    // m/s^3/sqrt(Hz)
+        double gyr_cov;                 // Gyroscope noise covariance [rad/s]
+        double acc_cov;                 // Accelerometer noise covariance [m/s^2]
+        double b_gyr_cov;               // Gyroscope bias covariance [rad/s]
+        double b_acc_cov;               // Accelerometer bias covariance [m/s^2]
         Eigen::Vector3d gravity;        // Gravity vector (m/s^2)
     } imu;
     

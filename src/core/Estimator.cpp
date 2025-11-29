@@ -74,7 +74,7 @@ Estimator::Estimator()
     pko_config.use_adaptive = true;
     pko_config.min_scale_factor = 0.01;
     pko_config.max_scale_factor = 10.0;
-    pko_config.num_alpha_segments = 100;
+    pko_config.num_alpha_segments = 10;
     pko_config.truncated_threshold = 10.0;
     pko_config.gmm_components = 2;
     pko_config.gmm_sample_size = 100;
@@ -440,9 +440,11 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     auto start_undistort = std::chrono::high_resolution_clock::now();
     PointCloudPtr undistorted_cloud = lidar.cloud;
     if (m_params.enable_undistortion) {
+        // Use actual scan duration from last LiDAR frame
+        double scan_start_time = m_first_lidar_frame ? lidar.timestamp - 0.1 : m_last_lidar_time;
         undistorted_cloud = UndistortPointCloud(
             lidar.cloud, 
-            lidar.timestamp - 0.1,  // Assume 100ms scan duration
+            scan_start_time,
             lidar.timestamp
         );
     }
@@ -455,8 +457,9 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     VoxelGrid scan_filter;
     scan_filter.SetInputCloud(undistorted_cloud);
     scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));  // Use config voxel size for input scan
-    // scan_filter.SetPlanarityFilter(true);  // Enable planarity-based filtering
-    // scan_filter.SetPlanarityThreshold(static_cast<float>(m_params.scan_planarity_threshold));  // Use config threshold
+    scan_filter.SetPlanarityFilter(false);  // Enable L1-based planarity filtering
+    // scan_filter.SetPlanarityThreshold(static_cast<float>(m_params.scan_planarity_threshold));  // Point-to-plane distance threshold
+    scan_filter.SetHierarchyFactor(m_params.voxel_hierarchy_factor);  // L1 = factor × L0
     scan_filter.Filter(*downsampled_scan);
     auto end_downsample = std::chrono::high_resolution_clock::now();
     double time_downsample = std::chrono::duration<double, std::milli>(end_downsample - start_downsample).count();
@@ -466,11 +469,12 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     PointCloudPtr range_filtered_scan = std::make_shared<PointCloud>();
     unsigned int initial_size = downsampled_scan->size();
     unsigned int final_size = 0;
+    const float min_range = static_cast<float>(m_params.min_range);
     const float max_range = static_cast<float>(m_params.max_map_distance);
     for(unsigned int i = 0; i < initial_size; ++i) {
         const auto& point = downsampled_scan->at(i);
         float range = std::sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
-        if (range <= max_range) {
+        if (range >= min_range && range <= max_range) {
             range_filtered_scan->push_back(point);
             final_size++;
         }
@@ -540,16 +544,14 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
     auto start_total = std::chrono::high_resolution_clock::now();
     
-    // Reset PKO for new scan
-    if (m_pko) {
-        m_pko->Reset();
-    }
-    
+  
+     // Reset PKO for new scan
+      
     // Nested Iterated Extended Kalman Filter (IEKF)
     // Outer loop: Re-linearization (find new correspondences)
     // Inner loop: Convergence (update state with same correspondences)
     const int max_outer_iterations = m_params.max_iterations;  // Re-linearization iterations from config
-    const int max_inner_iterations = 1;  // State update iterations per correspondence
+    const int max_inner_iterations = 4;  // State update iterations per correspondence
     bool converged = false;
     
     double total_corr_time = 0.0;
@@ -560,6 +562,13 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
     
     for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++) {
+
+        if (m_pko)
+        {
+            m_pko->Reset();
+        }
+
+       
         // OUTER LOOP: Find correspondences at current state (expensive, ~50ms)
         auto start_corr = std::chrono::high_resolution_clock::now();
 
@@ -585,7 +594,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             ComputeLidarJacobians(correspondences, H, residual);
 
             // Calculate residual normalization scale (only once at first iteration)
-            if (outer_iter == 0 && inner_iter == 0 && residual.size() > 0) {
+            if (inner_iter == 0 && residual.size() > 0) {
                 std::vector<double> residuals_for_scale;
                 residuals_for_scale.reserve(residual.size());
                 for (int i = 0; i < residual.size(); i++) {
@@ -635,7 +644,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             
             for (int i = 0; i < num_corr; i++) {
                 float abs_normalized_residual = std::abs(normalized_residual(i));
-                
+
                 if (abs_normalized_residual <= huber_threshold) {
                     // L2 region: w = 1
                     huber_weights(i) = 1.0f;
@@ -715,6 +724,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
         
         // If inner loop didn't converge or this is first outer iteration, continue to re-linearize
     }
+    
 
     m_last_correspondences = correspondences;
 
@@ -793,12 +803,11 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         // === 3. Calculate point-to-plane distance ===
         Eigen::Vector3f p_world(query_point.x, query_point.y, query_point.z);
         float dist_to_plane = std::abs(surfel_normal.dot(p_world - surfel_centroid));
+        // // voxel size
+        // if(dist_to_plane > 0.5f) {
+        //     continue;  // Discard point if too far from surfel
+        // }
 
-        // Discard if too far from plane (use voxel size x 2 as threshold)
-        if(dist_to_plane > static_cast<float>(m_params.voxel_size)*2.0f) {
-            continue;
-        }
-        
         // === 4. Add valid correspondence ===
         // Plane equation: n^T * x + d = 0, where d = -n^T * centroid
         float plane_d = -surfel_normal.dot(surfel_centroid);

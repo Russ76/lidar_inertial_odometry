@@ -442,6 +442,7 @@ int main(int argc, char** argv) {
     estimator.m_params.max_iterations = config.estimator.max_iterations;
     estimator.m_params.convergence_threshold = config.estimator.convergence_threshold;
     estimator.m_params.enable_undistortion = config.estimator.enable_undistortion;
+    estimator.m_params.min_range = config.estimator.min_distance;
     estimator.m_params.max_map_distance = config.estimator.max_distance;
     estimator.m_params.max_voxel_hit_count = config.estimator.max_voxel_hit_count;
     estimator.m_params.voxel_hierarchy_factor = config.estimator.voxel_hierarchy_factor;
@@ -453,11 +454,11 @@ int main(int argc, char** argv) {
     estimator.m_params.scan_planarity_threshold = config.estimator.scan_planarity_threshold;
     estimator.m_params.map_planarity_threshold = config.estimator.map_planarity_threshold;
     
-    // Configure IMU noise parameters from config
-    estimator.m_params.gyr_noise_std = config.imu.gyro_noise_density;
-    estimator.m_params.acc_noise_std = config.imu.acc_noise_density;
-    estimator.m_params.gyr_bias_noise_std = config.imu.gyro_bias_random_walk;
-    estimator.m_params.acc_bias_noise_std = config.imu.acc_bias_random_walk;
+    // Configure IMU noise parameters from config (convert covariance to std deviation)
+    estimator.m_params.gyr_noise_std = std::sqrt(config.imu.gyr_cov);
+    estimator.m_params.acc_noise_std = std::sqrt(config.imu.acc_cov);
+    estimator.m_params.gyr_bias_noise_std = std::sqrt(config.imu.b_gyr_cov);
+    estimator.m_params.acc_bias_noise_std = std::sqrt(config.imu.b_acc_cov);
     
     // Configure extrinsics from config
     estimator.m_params.R_il = config.extrinsics.R_il.cast<float>();
