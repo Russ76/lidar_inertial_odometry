@@ -85,6 +85,37 @@ M3DGR/
 ```
 
 
+## Benchmark
+
+Evaluation on [M3DGR Dataset](https://github.com/sjtuyinjie/M3DGR) comparing with FAST-LIO2.
+
+### Livox Mid-360
+
+| Sequence    | Ours (m) | FAST-LIO2 (m) | Ours (FPS) | FAST-LIO2 (FPS) |
+|-------------|----------|---------------|------------|-----------------|
+| Dynamic03   | 0.1456   | 0.1436        | 394        | 256             |
+| Dynamic04   | 0.1549   | 0.1535        | 357        | 250             |
+| Outdoor01   | 0.1536   | 0.1517        | 651        | 495             |
+| Outdoor04   | 0.1562   | 0.1546        | 533        | 305             |
+| Occlusion03 | 0.1269   | 0.1255        | 408        | 278             |
+| Occlusion04 | 0.1410   | 0.1395        | 354        | 235             |
+| **Average** | **0.1464** | **0.1447**  | **428**    | **285**         |
+
+### Livox AVIA
+
+| Sequence    | Ours (m) | FAST-LIO2 (m) | Ours (FPS) | FAST-LIO2 (FPS) |
+|-------------|----------|---------------|------------|-----------------|
+| Dynamic03   | 0.1478   | 0.1443        | 337        | 267             |
+| Dynamic04   | 0.1563   | 0.1532        | 305        | 247             |
+| Outdoor01   | 0.1549   | 0.1515        | 365        | 295             |
+| Outdoor04   | 0.1560   | 0.1547        | 379        | 262             |
+| Occlusion03 | 0.1252   | 0.1238        | 290        | 227             |
+| Occlusion04 | 0.1402   | 0.1396        | 354        | 222             |
+| **Average** | **0.1467** | **0.1445**  | **335**    | **251**         |
+
+> **Note**: RPE RMSE (Relative Pose Error) is reported. Our method achieves **~1.5x faster** processing speed while maintaining comparable accuracy.
+
+
 ## Project Structure
 
 ```
