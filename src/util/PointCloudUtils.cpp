@@ -77,29 +77,50 @@ void VoxelGrid::Filter(PointCloud& output) {
         return;
     }
     
-    // Use map to store all points in each voxel
-    std::map<VoxelKey, VoxelPoints> voxel_map;
+    // L2 voxel size for noise filtering (5x5x5 L0 voxels per L2)
+    // Note: This is only for downsampling, not actual VoxelMap structure
+    const float l2_size = m_leaf_size * 5;
     
-    // Process points one by one, accumulating into voxels
+    // Step 1: Group points into L2 voxels first
+    std::map<VoxelKey, std::vector<Point3D>> l2_voxel_map;
+    
     for (size_t i = 0; i < m_input_cloud->size(); ++i) {
         const Point3D& point = m_input_cloud->at(i);
-        VoxelKey voxel_key = GetVoxelKey(point);
+        int l2_x = static_cast<int>(std::floor(point.x / l2_size));
+        int l2_y = static_cast<int>(std::floor(point.y / l2_size));
+        int l2_z = static_cast<int>(std::floor(point.z / l2_size));
+        VoxelKey l2_key(l2_x, l2_y, l2_z);
+        l2_voxel_map[l2_key].push_back(point);
+    }
+    
+    // Step 2: For each L2 with >1 point, subdivide into L0 voxels
+    std::map<VoxelKey, VoxelPoints> l0_voxel_map;
+    
+    for (auto& l2_voxel : l2_voxel_map) {
+        // Skip isolated L2 voxels (only 1 point = noise)
+        if (l2_voxel.second.size() < 2) {
+            continue;
+        }
         
-        auto& voxel_points = voxel_map[voxel_key];
-        voxel_points.AddPoint(point);
+        // Subdivide into L0 voxels
+        for (const Point3D& point : l2_voxel.second) {
+            VoxelKey l0_key = GetVoxelKey(point);
+            l0_voxel_map[l0_key].AddPoint(point);
+        }
     }
     
     output.clear();
-    output.reserve(voxel_map.size());
+    output.reserve(l0_voxel_map.size());
     
-    size_t total_voxels = voxel_map.size();
+    size_t total_voxels = l0_voxel_map.size();
     size_t planar_voxels = 0;
     float min_planarity = 1.0f;
     float max_planarity = 0.0f;
     float sum_planarity = 0.0f;
     
-    // Process each voxel: compute planarity and filter
-    for (auto& voxel : voxel_map) {
+    // Step 3: Process each L0 voxel
+    for (auto& voxel : l0_voxel_map) {
+        const VoxelKey& key = voxel.first;
         VoxelPoints& voxel_points = voxel.second;
         
         // If planarity filtering is enabled, check planarity
@@ -125,27 +146,6 @@ void VoxelGrid::Filter(PointCloud& output) {
         // Extract and add centroid to output
         output.push_back(voxel_points.GetCentroid());
     }
-    
-    // // Log statistics
-    // if (m_enable_planarity_filter) {
-    //     float avg_planarity = (total_voxels > 0) ? sum_planarity / total_voxels : 0.0f;
-    //     float retention_rate = (total_voxels > 0) ? (100.0f * planar_voxels / total_voxels) : 0.0f;
-        
-    //     spdlog::info("[VoxelGrid] Downsampling with Planarity Filter:");
-    //     spdlog::info("  Input points: {}", m_input_cloud->size());
-    //     spdlog::info("  Total voxels (before filter): {}", total_voxels);
-    //     spdlog::info("  Planar voxels (after filter): {} ({:.1f}%)", planar_voxels, retention_rate);
-    //     spdlog::info("  Voxel planarity stats:");
-    //     spdlog::info("    - Min planarity: {:.6f}", min_planarity);
-    //     spdlog::info("    - Max planarity: {:.6f}", max_planarity);
-    //     spdlog::info("    - Avg planarity: {:.6f}", avg_planarity);
-    //     spdlog::info("    - Threshold: {:.6f}", m_planarity_threshold);
-    //     spdlog::info("  Output points: {}", output.size());
-    // } else {
-    //     spdlog::info("[VoxelGrid] Downsampling (no planarity filter):");
-    //     spdlog::info("  Input points: {}", m_input_cloud->size());
-    //     spdlog::info("  Output voxels/points: {}", output.size());
-    // }
 }
 
 // ===== RangeFilter Implementation =====

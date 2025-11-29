@@ -511,6 +511,31 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     auto end_map_update = std::chrono::high_resolution_clock::now();
     double time_map_update = std::chrono::duration<double, std::milli>(end_map_update - start_map_update).count();
     
+    // Accumulate timing for 100-frame averages
+    double time_preprocess = time_undistort + time_downsample + time_range_filter;
+    m_sum_preprocess_time += time_preprocess;
+    m_sum_lidar_time += time_iekf;
+    m_sum_map_time += time_map_update;
+    m_timing_frame_count++;
+    
+    if (m_timing_frame_count >= 100) {
+        spdlog::info("[Timing] avg 100 frames - preprocess: {:.2f}ms, lidar: {:.2f}ms, map: {:.2f}ms",
+                     m_sum_preprocess_time / 100.0, m_sum_lidar_time / 100.0, m_sum_map_time / 100.0);
+        spdlog::info("[Timing]   corr: {:.2f}ms (transform: {:.2f}, surfel: {:.2f}, add: {:.2f})",
+                     m_sum_corr_time / 100.0, 
+                     m_sum_corr_transform_time / 100.0, m_sum_corr_surfel_time / 100.0, m_sum_corr_add_time / 100.0);
+        m_sum_preprocess_time = 0.0;
+        m_sum_lidar_time = 0.0;
+        m_sum_map_time = 0.0;
+        m_sum_corr_time = 0.0;
+        m_sum_jacobian_time = 0.0;
+        m_sum_solve_time = 0.0;
+        m_sum_corr_transform_time = 0.0;
+        m_sum_corr_surfel_time = 0.0;
+        m_sum_corr_add_time = 0.0;
+        m_timing_frame_count = 0;
+    }
+    
     // Update statistics
     auto end_time = std::chrono::high_resolution_clock::now();
     double processing_time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
@@ -544,6 +569,10 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
     auto start_total = std::chrono::high_resolution_clock::now();
     
+    // Timing accumulators for this frame
+    double frame_corr_time = 0.0;
+    double frame_jacobian_time = 0.0;
+    double frame_solve_time = 0.0;
   
      // Reset PKO for new scan
       
@@ -576,6 +605,7 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
         auto end_corr = std::chrono::high_resolution_clock::now();
         double corr_time = std::chrono::duration<double, std::milli>(end_corr - start_corr).count();
         total_corr_time += corr_time;
+        frame_corr_time += corr_time;
         
         if (correspondences.empty()) {
             break;
@@ -589,9 +619,14 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             total_inner_iters++;
             
             // Compute Jacobian H and residual at current state (with SAME correspondences)
+            auto start_jacobian = std::chrono::high_resolution_clock::now();
             Eigen::MatrixXf H;
             Eigen::VectorXf residual;
             ComputeLidarJacobians(correspondences, H, residual);
+            auto end_jacobian = std::chrono::high_resolution_clock::now();
+            frame_jacobian_time += std::chrono::duration<double, std::milli>(end_jacobian - start_jacobian).count();
+
+            auto start_solve = std::chrono::high_resolution_clock::now();
 
             // Calculate residual normalization scale (only once at first iteration)
             if (inner_iter == 0 && residual.size() > 0) {
@@ -697,6 +732,9 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
             // Apply state correction
             ApplyStateCorrection(dx);
             
+            auto end_solve = std::chrono::high_resolution_clock::now();
+            frame_solve_time += std::chrono::duration<double, std::milli>(end_solve - start_solve).count();
+            
             // Check inner convergence
             float rot_norm = dx.segment<3>(0).norm();
             float pos_norm = dx.segment<3>(3).norm();
@@ -727,6 +765,11 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     
 
     m_last_correspondences = correspondences;
+
+    // Accumulate timing for lidar breakdown
+    m_sum_corr_time += frame_corr_time;
+    m_sum_jacobian_time += frame_jacobian_time;
+    m_sum_solve_time += frame_solve_time;
 
     auto end_total = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
@@ -767,6 +810,11 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
     
     Eigen::Matrix4f T_wl = T_wb * T_il;  // Combined transformation
     
+    // Timing accumulators
+    double transform_time = 0.0;
+    double surfel_time = 0.0;
+    double add_time = 0.0;
+    
     // Process points and find correspondences using L1 surfels
     int valid_correspondences = 0;
     int total_attempts = 0;
@@ -778,6 +826,7 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         total_attempts++;
         
         // === 1. Transform point to world frame ===
+        auto t1 = std::chrono::high_resolution_clock::now();
         const auto& pt_scan = scan->at(i);
         Eigen::Vector4f pt_homo(pt_scan.x, pt_scan.y, pt_scan.z, 1.0f);
         Eigen::Vector4f pt_world_homo = T_wl * pt_homo;
@@ -787,6 +836,8 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         query_point.x = pt_world_homo.x();
         query_point.y = pt_world_homo.y();
         query_point.z = pt_world_homo.z();
+        auto t2 = std::chrono::high_resolution_clock::now();
+        transform_time += std::chrono::duration<double, std::milli>(t2 - t1).count();
         
         // === 2. Get surfel from the L1 voxel containing this point ===
         Eigen::Vector3f surfel_normal;
@@ -794,6 +845,8 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         float planarity_score;
         
         bool has_surfel = m_voxel_map->GetSurfelAtPoint(query_point, surfel_normal, surfel_centroid, planarity_score);
+        auto t3 = std::chrono::high_resolution_clock::now();
+        surfel_time += std::chrono::duration<double, std::milli>(t3 - t2).count();
         
         if (!has_surfel) {
             no_surfel_count++;
@@ -819,8 +872,15 @@ Estimator::FindCorrespondences(const PointCloudPtr scan) {
         
         // Store: (p_lidar, plane_normal_world, plane_d, scan_index)
         correspondences.emplace_back(p_lidar, surfel_normal, plane_d, i);
+        auto t4 = std::chrono::high_resolution_clock::now();
+        add_time += std::chrono::duration<double, std::milli>(t4 - t3).count();
         valid_correspondences++;
     }
+    
+    // Accumulate timing
+    m_sum_corr_transform_time += transform_time;
+    m_sum_corr_surfel_time += surfel_time;
+    m_sum_corr_add_time += add_time;
     
     // Update valid correspondence count
     m_num_valid_correspondences = valid_correspondences;
@@ -908,6 +968,7 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     if (!m_voxel_map) {
         m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
         m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
+        m_voxel_map->SetInitHitCount(m_params.init_hit_count);
         m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
         m_voxel_map->SetPlanarityThreshold(static_cast<float>(m_params.map_planarity_threshold));
     }
@@ -958,6 +1019,7 @@ void Estimator::CleanLocalMap() {
         if (!m_map_cloud->empty()) {
             m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
             m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
+            m_voxel_map->SetInitHitCount(m_params.init_hit_count);
             m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
             m_voxel_map->SetPlanarityThreshold(static_cast<float>(m_params.map_planarity_threshold));
             m_voxel_map->AddPointCloud(m_map_cloud);

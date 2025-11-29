@@ -392,7 +392,7 @@ private:
         
         float CalculatePlanarity() const {
             if (points.size() < 3) {
-                return 1.0f;  // Not enough points for planarity check
+                return 0.0f;  // Not enough points for planarity check
             }
             
             // Compute centroid

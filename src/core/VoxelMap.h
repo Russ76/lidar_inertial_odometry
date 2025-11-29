@@ -95,6 +95,17 @@ public:
     int GetMaxHitCount() const { return m_max_hit_count; }
     
     /**
+     * @brief Set initial hit count for new voxels
+     * @param count Initial hit count (default: 1)
+     */
+    void SetInitHitCount(int count) { m_init_hit_count = count; }
+    
+    /**
+     * @brief Get initial hit count for new voxels
+     */
+    int GetInitHitCount() const { return m_init_hit_count; }
+    
+    /**
      * @brief Set hierarchy factor (L1 = factor × L0)
      * @param factor Hierarchy factor (3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7, must be odd)
      */
@@ -274,6 +285,7 @@ private:
     
     float m_voxel_size;  ///< Size of each voxel in meters (Level 0: 1×1×1)
     int m_max_hit_count; ///< Maximum hit count for occupancy (default: 10)
+    int m_init_hit_count = 1; ///< Initial hit count for new voxels (default: 1)
     int m_hierarchy_factor; ///< L1 voxel factor: L1 = factor × L0 (default: 3 for 3×3×3)
     float m_planarity_threshold = 0.01f; ///< Planarity threshold for surfel creation (sigma_min/sigma_max)
     

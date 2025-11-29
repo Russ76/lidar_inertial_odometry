@@ -100,6 +100,11 @@ void VoxelMap::UnregisterFromParent(const VoxelKey& key_L0) {
     // Unregister from L1
     it_L1->second.occupied_children.erase(key_L0);
     
+    // If L1 has fewer than 5 children, invalidate surfel
+    if (it_L1->second.occupied_children.size() < 5) {
+        it_L1->second.has_surfel = false;
+    }
+    
     // If L1 becomes empty, clean it up
     if (it_L1->second.occupied_children.empty()) {
         m_voxels_L1.erase(it_L1);
@@ -123,9 +128,9 @@ void VoxelMap::AddPoint(const Point3D& point) {
     int n = voxel_data.point_count;
     
     if (n == 0) {
-        // First point in voxel - initialize with max_voxel_hit_count
+        // First point in voxel - initialize with init_hit_count
         voxel_data.centroid = point_vec;
-        voxel_data.hit_count = m_max_hit_count;  // Initialize with max_voxel_hit_count
+        voxel_data.hit_count = m_init_hit_count;  // Initialize with init_hit_count
         voxel_data.point_count = 1;
     } else {
         // Weighted average: new_centroid = (n * old_centroid + new_point) / (n + 1)
@@ -363,19 +368,18 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         // Compute planarity score for statistics
         float planarity = singular_values(2) / (singular_values(0) + 1e-6f);
 
-        if(planarity > m_planarity_threshold)
+        if(planarity > m_planarity_threshold && current_child_count > 10)
         {
-            // Not planar enough - clear all L0 children
+            // Not planar enough - delete L1 and all its L0 children immediately
             node_L1.has_surfel = false;
             
-            // Clear all L0 children of this L1 voxel (set hit_count to 0)
+            // Delete all L0 children from m_voxels_L0
             for (const VoxelKey& key_L0 : node_L1.occupied_children) {
-                auto it_L0 = m_voxels_L0.find(key_L0);
-                if (it_L0 != m_voxels_L0.end()) {
-                    it_L0->second.hit_count = 0;  // Mark for removal
-                }
+                m_voxels_L0.erase(key_L0);
             }
-            node_L1.occupied_children.clear();  // Clear children list
+            
+            // Erase L1 voxel itself
+            m_voxels_L1.erase(it_L1);
             
             continue;
         }
@@ -393,14 +397,6 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         surfels_created++;
         
     }
-    auto end_step6 = std::chrono::high_resolution_clock::now();
-    double time_step6 = std::chrono::duration<double, std::milli>(end_step6 - start_step6).count();
-    
-    // Calculate total time
-    auto end_total = std::chrono::high_resolution_clock::now();
-    double time_total = std::chrono::duration<double, std::milli>(end_total - start_total).count();
-    
-   
 }
 
 std::vector<VoxelKey> VoxelMap::GetOccupiedVoxels() const {

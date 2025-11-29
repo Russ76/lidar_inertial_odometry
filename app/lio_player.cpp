@@ -445,6 +445,7 @@ int main(int argc, char** argv) {
     estimator.m_params.min_range = config.estimator.min_distance;
     estimator.m_params.max_map_distance = config.estimator.max_distance;
     estimator.m_params.max_voxel_hit_count = config.estimator.max_voxel_hit_count;
+    estimator.m_params.init_hit_count = config.estimator.init_hit_count;
     estimator.m_params.voxel_hierarchy_factor = config.estimator.voxel_hierarchy_factor;
     estimator.m_params.frustum_fov_horizontal = config.estimator.frustum_fov_horizontal;
     estimator.m_params.frustum_fov_vertical = config.estimator.frustum_fov_vertical;
@@ -655,13 +656,7 @@ int main(int argc, char** argv) {
                     viewer.UpdateStateInfo(lidar_frame_count, 
                         processed_cloud ? processed_cloud->size() : 0);
                     
-                    // Update map visualization (choose between point cloud or voxel cubes)
-                    lio::PointCloudPtr map_cloud = estimator.GetMapPointCloud();
-                    if (map_cloud) {
-                        viewer.UpdateMapPointCloud(map_cloud);
-                    }
-                    
-                    // Update voxel map for cube visualization
+                    // Update voxel map for cube/surfel visualization
                     std::shared_ptr<lio::VoxelMap> voxel_map = estimator.GetVoxelMap();
                     if (voxel_map) {
                         viewer.UpdateVoxelMap(voxel_map);

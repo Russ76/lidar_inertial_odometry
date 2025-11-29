@@ -38,6 +38,7 @@ void SetDefaultConfig(LIOConfig& config) {
     config.estimator.min_distance = 0.5;
     config.estimator.max_distance = 50.0;
     config.estimator.max_voxel_hit_count = 10;
+    config.estimator.init_hit_count = 1;  // Initial hit count for new points
     config.estimator.voxel_hierarchy_factor = 3;  // Default: 3×3×3 (L1 = 3 × L0)
     config.estimator.frustum_fov_horizontal = 90.0;
     config.estimator.frustum_fov_vertical = 90.0;
@@ -126,6 +127,8 @@ bool LoadConfig(const std::string& config_path, LIOConfig& config) {
                 config.estimator.max_distance = estimator["max_distance"].as<double>();
             if (estimator["max_voxel_hit_count"]) 
                 config.estimator.max_voxel_hit_count = estimator["max_voxel_hit_count"].as<int>();
+            if (estimator["init_hit_count"]) 
+                config.estimator.init_hit_count = estimator["init_hit_count"].as<int>();
             if (estimator["voxel_hierarchy_factor"]) {
                 config.estimator.voxel_hierarchy_factor = estimator["voxel_hierarchy_factor"].as<int>();
                 // Validate: must be odd number (3, 5, 7, etc.)

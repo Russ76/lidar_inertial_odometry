@@ -167,6 +167,7 @@ public:
         double min_range = 0.5;               // m (minimum range for point filtering)
         double max_map_distance = 50.0;       // m
         int max_voxel_hit_count = 10;         // Maximum hit count for voxel occupancy
+        int init_hit_count = 1;               // Initial hit count when adding new points
         int voxel_hierarchy_factor = 3;       // L1 voxel factor: L1 = factor × L0 (3, 5, 7, etc.)
         double min_plane_points = 5;
         
@@ -243,6 +244,22 @@ private:
     bool m_initialized;
     double m_last_update_time;
     int m_frame_count;
+
+    // Timing statistics (100-frame averages)
+    double m_sum_preprocess_time = 0.0;
+    double m_sum_lidar_time = 0.0;
+    double m_sum_map_time = 0.0;
+    int m_timing_frame_count = 0;
+
+    // Lidar update timing breakdown
+    double m_sum_corr_time = 0.0;      // FindCorrespondences
+    double m_sum_jacobian_time = 0.0;  // ComputeLidarJacobians
+    double m_sum_solve_time = 0.0;     // Kalman solve + state update
+
+    // FindCorrespondences breakdown
+    double m_sum_corr_transform_time = 0.0;   // Point transformation
+    double m_sum_corr_surfel_time = 0.0;      // GetSurfelAtPoint (map lookup)
+    double m_sum_corr_add_time = 0.0;         // Adding correspondences
 
     unsigned int m_num_valid_correspondences = 0;  // Number of valid correspondences in current scan
     

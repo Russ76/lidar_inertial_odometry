@@ -126,6 +126,12 @@ public:
     void UpdateMapPointCloud(PointCloudPtr map_cloud);
     
     /**
+     * @brief Update map centroids for lightweight visualization
+     * @param centroids Vector of (centroid, alpha) pairs
+     */
+    void UpdateMapCentroids(const std::vector<std::pair<Eigen::Vector3f, float>>& centroids);
+    
+    /**
      * @brief Update voxel map for visualization
      * @param voxel_map Voxel map to display as cubes
      */
@@ -194,6 +200,7 @@ private:
     // ===== Data Storage =====
     PointCloudPtr m_current_cloud;                     ///< Current point cloud
     PointCloudPtr m_map_cloud;                         ///< Map point cloud
+    std::vector<std::pair<Eigen::Vector3f, float>> m_map_centroids; ///< Cached map centroids (centroid, alpha)
     std::shared_ptr<VoxelMap> m_voxel_map;             ///< Voxel map for cube visualization
     Eigen::Matrix4f m_current_pose;                    ///< Current pose
     std::vector<Eigen::Matrix4f> m_trajectory;         ///< Trajectory
@@ -264,10 +271,16 @@ private:
     void DrawMapPointCloud();
     
     /**
-     * @brief Draw voxel map as cubes
+     * @brief Draw L0 voxel map as cubes
      * @param voxel_map Voxel map to render as cubes
      */
     void DrawVoxelCubes(std::shared_ptr<VoxelMap> voxel_map);
+    
+    /**
+     * @brief Draw L1 voxel cubes (valid surfels only)
+     * @param voxel_map Voxel map containing L1 data
+     */
+    void DrawL1VoxelCubes(std::shared_ptr<VoxelMap> voxel_map);
     
     /**
      * @brief Draw L1 surfels with normal vectors
