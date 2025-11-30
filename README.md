@@ -28,10 +28,9 @@ This project implements adaptive robust estimation using Probabilistic Kernel Op
 ```
 
 ## Demo
+[![LIO Demo](https://img.youtube.com/vi/20gG_0QFLHs/0.jpg)](https://www.youtube.com/watch?v=20gG_0QFLHs)
 
-[![LIO Demo](https://img.youtube.com/vi/jSldu7RABqw/0.jpg)](https://www.youtube.com/watch?v=jSldu7RABqw)
-
-
+### ROS2 Wrapper: https://github.com/93won/lio_ros_wrapper
 
 ### Installation (Ubuntu 20.04)
 
@@ -156,6 +155,5 @@ lidar_inertial_odometry/
 ├── CMakeLists.txt        # CMake build configuration
 └── README.md             # This file
 ```
-
 
 
