@@ -10,7 +10,7 @@
 
 - **Iterated Extended Kalman Filter (IEKF)**: Direct LiDAR-IMU fusion with nested iteration for re-linearization and convergence
 - **Adaptive Robust Estimation**: Probabilistic Kernel Optimization (PKO) for automatic Huber loss scale tuning
-- **3-Level Hierarchical Voxel Map (L2→L1→L0)**: Coarse-to-fine spatial indexing with Z-order Morton code hashing for cache-friendly O(1) lookup
+- **2-Level Hierarchical Voxel Map (L1→L0)**: Coarse-to-fine spatial indexing with Z-order Morton code hashing for cache-friendly O(1) lookup
 - **Pre-computed Surfel Planes**: L1 voxels store fitted plane surfels (normal, centroid, planarity) via incremental covariance, enabling fast point-to-plane correspondence
 - **Motion Compensation**: IMU-based undistortion for moving LiDAR scans
 
