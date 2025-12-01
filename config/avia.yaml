@@ -32,17 +32,17 @@ estimator:
   convergence_threshold: 0.001 # Convergence threshold for optimization
 
   # Surfel filtering
-  map_planarity_threshold: 0.3    # Planarity threshold (sigma_min/sigma_max, smaller = stricter)
+  map_planarity_threshold: 0.03    # Planarity threshold (sigma_min/sigma_max, smaller = stricter)
 
   # Temporal bin downsampling (alternative to voxel-based downsampling)
-  temporal_bins: 10000           # Number of bins for temporal downsampling (0 = use voxel-based)
+  temporal_bins: 5000           # Number of bins for temporal downsampling (0 = use voxel-based)
                                 # offset_time [0~scan_duration] is divided into N bins
                                 # Only one point per bin is kept (first-come basis)
   temporal_then_voxel: true    # Apply voxel downsample after temporal bin (combined filtering)
 
   # Local map parameters
   min_distance: 3.0             # Minimum distance for lidar filtering (meters)
-  max_distance: 100.0           # Maximum distance for lidar filtering (meters)
+  max_distance: 200.0           # Maximum distance for lidar filtering (meters)
   map_box_multiplier: 2.0       # Map box size = max_distance × multiplier (e.g., 100m × 2 = 200m box)
                                 # Map is re-centered when sensor moves > max_distance/multiplier from center
   voxel_hierarchy_factor: 3     # L1 voxel factor: L1 = factor × L0 (e.g., 3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7)

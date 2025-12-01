@@ -101,17 +101,52 @@ M3DGR/
 
 ## Benchmark
 
-Evaluation on [M3DGR Dataset](https://github.com/sjtuyinjie/M3DGR) comparing with FAST-LIO2.
+Evaluation on [M3DGR Dataset](https://github.com/sjtuyinjie/M3DGR) comparing with [FAST-LIO2](https://github.com/hku-mars/FAST_LIO) and [FASTER-LIO](https://github.com/gaoxiang12/faster-lio).
 
+### Summary
 
-### Overall (Avia, Mid-360)
+| Sensor | Metric | **Ours** | FAST-LIO2 | FASTER-LIO |
+|--------|--------|----------|-----------|------------|
+| **Livox AVIA** | APE RMSE (m) | 0.365 | 0.397 | 0.362 |
+| **Livox AVIA** | FPS | **531** | 125 | 184 |
+| **Livox Mid360** | APE RMSE (m) | 0.342 | 0.342 | 0.352 |
+| **Livox Mid360** | FPS | **690** | 282 | 353 |
 
-| Metric | Ours | FAST-LIO2 |
-|--------|------|-----------|
-| **Avg. APE RMSE** | **0.396m** | 0.432m |
-| **Avg. FPS** | **395** | 267 |
+### Key Results
 
-> **Note**: APE RMSE (Absolute Pose Error) is reported. Our method achieves **~48% faster** processing speed with comparable or better accuracy.
+- **4.25× faster** than FAST-LIO2 with **8% better accuracy** (AVIA)
+- **2.89× faster** than FASTER-LIO with **equivalent accuracy** (<1% difference)
+- **2.45× faster** than FAST-LIO2 with **identical accuracy** (Mid360)
+
+### Detailed Results (Livox AVIA)
+
+| Sequence | Ours (m) | FAST-LIO2 (m) | FASTER-LIO (m) | Ours (FPS) | FL2 (FPS) | FL (FPS) |
+|----------|----------|---------------|----------------|------------|-----------|----------|
+| Dark01 | 0.118 | 0.258 | 0.223 | 670 | 140 | 203 |
+| Dark02 | 0.692 | 0.729 | 0.645 | 488 | 120 | 195 |
+| Dynamic03 | 0.266 | 0.165 | 0.151 | 606 | 145 | 225 |
+| Dynamic04 | 0.392 | 0.279 | 0.261 | 603 | 138 | 201 |
+| Occlusion03 | 0.271 | 0.257 | 0.283 | 561 | 124 | 179 |
+| Occlusion04 | 0.295 | 0.479 | 0.337 | 501 | 130 | 203 |
+| Varying-illu03 | 0.961 | 0.897 | 1.032 | 436 | 120 | 165 |
+| Varying-illu04 | 0.125 | 0.102 | 0.119 | 435 | 93 | 144 |
+| Varying-illu05 | 0.167 | 0.402 | 0.207 | 576 | 133 | 172 |
+| **Average** | **0.365** | 0.397 | 0.362 | **531** | 125 | 184 |
+
+### Detailed Results (Livox Mid360)
+
+| Sequence | Ours (m) | FAST-LIO2 (m) | FASTER-LIO (m) | Ours (FPS) | FL2 (FPS) | FL (FPS) |
+|----------|----------|---------------|----------------|------------|-----------|----------|
+| Dark01 | 0.185 | 0.177 | 0.173 | 1044 | 589 | 925 |
+| Dark02 | 0.310 | 0.239 | 0.212 | 720 | 337 | 401 |
+| Dynamic03 | 0.206 | 0.178 | 0.178 | 670 | 263 | 461 |
+| Dynamic04 | 0.246 | 0.216 | 0.214 | 657 | 265 | 363 |
+| Occlusion03 | 0.315 | 0.423 | 0.463 | 687 | 301 | 373 |
+| Occlusion04 | 0.345 | 0.216 | 0.284 | 596 | 251 | 385 |
+| Varying-illu03 | 0.957 | 1.221 | 1.189 | 618 | 242 | 259 |
+| Varying-illu04 | 0.206 | 0.161 | 0.163 | 664 | 205 | 170 |
+| Varying-illu05 | 0.307 | 0.245 | 0.290 | 704 | 297 | 498 |
+| **Average** | **0.342** | 0.342 | 0.352 | **690** | 282 | 353 |
 
 
 ## Project Structure
