@@ -444,8 +444,7 @@ int main(int argc, char** argv) {
     estimator.m_params.enable_undistortion = config.estimator.enable_undistortion;
     estimator.m_params.min_range = config.estimator.min_distance;
     estimator.m_params.max_map_distance = config.estimator.max_distance;
-    estimator.m_params.max_voxel_hit_count = config.estimator.max_voxel_hit_count;
-    estimator.m_params.init_hit_count = config.estimator.init_hit_count;
+    estimator.m_params.map_box_multiplier = config.estimator.map_box_multiplier;
     estimator.m_params.voxel_hierarchy_factor = config.estimator.voxel_hierarchy_factor;
     estimator.m_params.frustum_fov_horizontal = config.estimator.frustum_fov_horizontal;
     estimator.m_params.frustum_fov_vertical = config.estimator.frustum_fov_vertical;
@@ -454,6 +453,12 @@ int main(int argc, char** argv) {
     estimator.m_params.keyframe_rotation_threshold = config.estimator.keyframe_rotation_threshold;
     estimator.m_params.scan_planarity_threshold = config.estimator.scan_planarity_threshold;
     estimator.m_params.map_planarity_threshold = config.estimator.map_planarity_threshold;
+    estimator.m_params.point_to_surfel_threshold = config.estimator.point_to_surfel_threshold;
+    estimator.m_params.min_surfel_inliers = config.estimator.min_surfel_inliers;
+    estimator.m_params.min_linearity_ratio = config.estimator.min_linearity_ratio;
+    estimator.m_params.temporal_bins = config.estimator.temporal_bins;
+    estimator.m_params.temporal_then_voxel = config.estimator.temporal_then_voxel;
+    estimator.m_params.scan_duration = config.estimator.scan_duration;
     
     // Configure IMU noise parameters from config (convert covariance to std deviation)
     estimator.m_params.gyr_noise_std = std::sqrt(config.imu.gyr_cov);

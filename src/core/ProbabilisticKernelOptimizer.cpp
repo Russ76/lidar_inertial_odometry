@@ -63,7 +63,7 @@ double ProbabilisticKernelOptimizer::CalculateScaleFactor(const std::vector<doub
         double alpha = m_alpha_candidates[i];
         
         // Graduated non-convexity: skip alphas larger than reference
-        if (alpha >= m_alpha_star_ref) {
+        if (alpha > m_alpha_star_ref) {
             continue;
         }
         

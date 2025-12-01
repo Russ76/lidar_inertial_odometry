@@ -74,7 +74,7 @@ Estimator::Estimator()
     pko_config.use_adaptive = true;
     pko_config.min_scale_factor = 0.001;
     pko_config.max_scale_factor = 10.0;
-    pko_config.num_alpha_segments = 100;
+    pko_config.num_alpha_segments = 25;
     pko_config.truncated_threshold = 10.0;
     pko_config.gmm_components = 2;
     pko_config.gmm_sample_size = 100;
@@ -432,31 +432,52 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     std::lock_guard<std::mutex> lock_state(m_state_mutex);
     std::lock_guard<std::mutex> lock_map(m_map_mutex);
     
-    // === 1. Downsampling FIRST (reduces point count before undistortion) ===
-    auto downsampled_scan = std::make_shared<PointCloud>();
-    VoxelGrid scan_filter;
-    scan_filter.SetInputCloud(lidar.cloud);
-    scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));
-    scan_filter.SetPlanarityFilter(false);
-    // scan_filter.SetPlanarityThreshold(m_params.map_planarity_threshold);
-    scan_filter.SetHierarchyFactor(m_params.voxel_hierarchy_factor);
-    scan_filter.Filter(*downsampled_scan);
+    // === 1. Preprocessing: Downsampling + Undistortion + Range filtering ===
+    auto preprocess_start = std::chrono::high_resolution_clock::now();
+    
+    // Temporal bin-based downsampling (if temporal_bins > 0)
+    PointCloudPtr downsampled_scan;
+    if (m_params.temporal_bins > 0) {
+        downsampled_scan = TemporalBinDownsample(
+            lidar.cloud,
+            m_params.temporal_bins,
+            static_cast<float>(m_params.scan_duration)
+        );
+        
+        // Optionally apply voxel downsample after temporal bin
+        if (m_params.temporal_then_voxel) {
+            PointCloudPtr voxel_filtered = std::make_shared<PointCloud>();
+            VoxelGrid scan_filter;
+            scan_filter.SetInputCloud(downsampled_scan);
+            scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));
+            scan_filter.SetPlanarityFilter(true);
+            scan_filter.SetHierarchyFactor(m_params.voxel_hierarchy_factor);
+            scan_filter.Filter(*voxel_filtered);
+            downsampled_scan = voxel_filtered;
+        }
+    } else {
+        // Fallback to voxel-based downsampling only
+        downsampled_scan = std::make_shared<PointCloud>();
+        VoxelGrid scan_filter;
+        scan_filter.SetInputCloud(lidar.cloud);
+        scan_filter.SetLeafSize(static_cast<float>(m_params.voxel_size));
+        scan_filter.SetPlanarityFilter(true);
+        scan_filter.SetHierarchyFactor(m_params.voxel_hierarchy_factor);
+        scan_filter.Filter(*downsampled_scan);
+    }
 
-    // === 2. Undistortion (now on downsampled cloud - much faster!) ===
     PointCloudPtr undistorted_cloud = downsampled_scan;
     if (m_params.enable_undistortion) {
         double scan_start_time = m_first_lidar_frame ? lidar.timestamp - 0.1 : m_last_lidar_time;
         undistorted_cloud = UndistortPointCloud(
-            downsampled_scan,  // Use downsampled cloud (offset_time is averaged per voxel)
+            downsampled_scan,
             scan_start_time,
             lidar.timestamp
         );
     }
     
-    // Clear state history AFTER undistortion
     m_state_history.clear();
 
-    // === 3. Range filtering ===
     PointCloudPtr range_filtered_scan = std::make_shared<PointCloud>();
     unsigned int initial_size = undistorted_cloud->size();
     const float min_range = static_cast<float>(m_params.min_range);
@@ -469,10 +490,10 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
         }
     }
     
-    // Create LidarData with downsampled cloud for all processing
-    LidarData downsampled_lidar(lidar.timestamp, range_filtered_scan);
+    auto preprocess_end = std::chrono::high_resolution_clock::now();
+    double preprocess_time = std::chrono::duration<double, std::milli>(preprocess_end - preprocess_start).count();
     
-    // Store processed cloud for visualization
+    LidarData downsampled_lidar(lidar.timestamp, range_filtered_scan);
     m_processed_cloud = range_filtered_scan;
     
     // First frame: initialize map with downsampled cloud
@@ -486,18 +507,29 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
         return;
     }
     
-    // === 4. IEKF Update ===
+    // === 2. IEKF Update ===
+    auto iekf_start = std::chrono::high_resolution_clock::now();
     UpdateWithLidar(downsampled_lidar);
+    auto iekf_end = std::chrono::high_resolution_clock::now();
+    double iekf_time = std::chrono::duration<double, std::milli>(iekf_end - iekf_start).count();
     
-    // === 5. Map Update ===
+    // === 3. Map Update ===
+    auto map_start = std::chrono::high_resolution_clock::now();
     UpdateLocalMap(range_filtered_scan);
+    auto map_end = std::chrono::high_resolution_clock::now();
+    double map_time = std::chrono::duration<double, std::milli>(map_end - map_start).count();
     
-    // Update statistics - only track total processing time
+    // Update statistics
     auto end_time = std::chrono::high_resolution_clock::now();
     double processing_time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     
     {
         std::lock_guard<std::mutex> lock_stats(m_stats_mutex);
+        
+        // Accumulate timing stats
+        m_sum_preprocess_time += preprocess_time;
+        m_sum_iekf_time += iekf_time;
+        m_sum_map_time += map_time;
         m_processing_times.push_back(processing_time);
         m_statistics.total_frames++;
         m_statistics.avg_processing_time_ms = 
@@ -516,13 +548,21 @@ void Estimator::ProcessLidar(const LidarData& lidar) {
     m_last_lidar_state = m_current_state;
     m_frame_count++;
     
-    // Log average processing time every 100 frames
+    // Log detailed timing every 100 frames
     if (m_frame_count % 100 == 0) {
-        spdlog::info("[Estimator] Frame {}: avg processing time = {:.2f} ms", 
-                     m_frame_count, m_statistics.avg_processing_time_ms);
+        double avg_preprocess = m_sum_preprocess_time / 100.0;
+        double avg_iekf = m_sum_iekf_time / 100.0;
+        double avg_map = m_sum_map_time / 100.0;
+        double avg_total = avg_preprocess + avg_iekf + avg_map;
+        
+        spdlog::info("[Estimator] Frame {}: Total={:.2f}ms (Preprocess={:.2f}ms, IEKF={:.2f}ms, Map={:.2f}ms)", 
+                     m_frame_count, avg_total, avg_preprocess, avg_iekf, avg_map);
+        
+        // Reset accumulators
+        m_sum_preprocess_time = 0.0;
+        m_sum_iekf_time = 0.0;
+        m_sum_map_time = 0.0;
     }
-    
-
 }
 
 void Estimator::UpdateWithLidar(const LidarData& lidar) {
@@ -531,174 +571,189 @@ void Estimator::UpdateWithLidar(const LidarData& lidar) {
     // Nested Iterated Extended Kalman Filter (IEKF)
     // Outer loop: Re-linearization (find new correspondences)
     // Inner loop: Convergence (update state with same correspondences)
-    const int max_outer_iterations = m_params.max_iterations;  // Re-linearization iterations from config
-    const int max_inner_iterations = 4;  // State update iterations per correspondence
-    bool converged = false;
-    
-    int total_inner_iters = 0;
-    double residual_normalization_scale = 1.0;  // For PKO normalization
-    
-    // Last correspondences found (for map update after loop)
-    std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
+     const int max_outer_iterations = m_params.max_iterations; // Re-linearization iterations from config
+     const int max_inner_iterations = 4;                       // State update iterations per correspondence
+     bool converged = false;
 
-    for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++)
-    {
+     int total_inner_iters = 0;
+     double residual_normalization_scale = 1.0; // For PKO normalization
 
-        if (m_pko)
-        {
-            m_pko->Reset();
-        }
+     // Last correspondences found (for map update after loop)
+     std::vector<std::tuple<Eigen::Vector3f, Eigen::Vector3f, float, size_t>> correspondences;
 
-        // OUTER LOOP: Find correspondences at current state
-        correspondences = FindCorrespondences(lidar.cloud);
-        
-        if (correspondences.empty()) {
-            break;
-        }
-        
-        // INNER LOOP: Update state multiple times with SAME correspondences
-        bool inner_converged = false;
-        Eigen::Matrix<float, 18, 18> G_final;
-        
-        for (int inner_iter = 0; inner_iter < max_inner_iterations; inner_iter++) {
-            total_inner_iters++;
-            
-            // Compute Jacobian H and residual at current state (with SAME correspondences)
-            Eigen::MatrixXf H;
-            Eigen::VectorXf residual;
-            ComputeLidarJacobians(correspondences, H, residual);
+     for (int outer_iter = 0; outer_iter < max_outer_iterations; outer_iter++)
+     {
 
-            // Calculate residual normalization scale (only once at first iteration)
-            if (inner_iter == 0 && residual.size() > 0) {
-                std::vector<double> residuals_for_scale;
-                residuals_for_scale.reserve(residual.size());
-                for (int i = 0; i < residual.size(); i++) {
-                    residuals_for_scale.push_back(static_cast<double>(residual(i)));
-                }
-                std::sort(residuals_for_scale.begin(), residuals_for_scale.end());
-                
-                double mean = std::accumulate(residuals_for_scale.begin(), residuals_for_scale.end(), 0.0) / residuals_for_scale.size();
-                double variance = 0.0;
-                for (double val : residuals_for_scale) {
-                    variance += (val - mean) * (val - mean);
-                }
-                variance /= residuals_for_scale.size();
-                double std_dev = std::sqrt(variance);
-                
-                // Calculate residual normalization scale (std / 3)
-                residual_normalization_scale = std_dev / 3.0;
+         if (m_pko)
+         {
+             m_pko->Reset();
+         }
 
-                // spdlog::info("[PKO] Residual normalization scale (std/3): {:.6f}", residual_normalization_scale);
-            }
+         // OUTER LOOP: Find correspondences at current state
+         correspondences = FindCorrespondences(lidar.cloud);
 
-            // Calculate adaptive Huber scale using PKO with normalized residuals
-            double adaptive_huber_delta = 1.0;  // Default value
-            if (m_pko) {
-                // Convert residuals from float to double and normalize
-                std::vector<double> residuals_double(residual.size());
-                for (int i = 0; i < residual.size(); i++) {
-                    double normalized_residual = static_cast<double>(residual(i)) / std::max(residual_normalization_scale, 1e-6);
-                    residuals_double[i] = normalized_residual;
-                }
-                
-                // Calculate adaptive scale factor (alpha) using normalized residuals
-                adaptive_huber_delta = m_pko->CalculateScaleFactor(residuals_double);
-                
-                // spdlog::info("[PKO] Outer iter {}, Inner iter {}: alpha = {:.6f}", outer_iter, inner_iter, adaptive_huber_delta);
-            }
-            
-            // Normalize residuals for numerical stability
-            float normalization_scale_f = static_cast<float>(residual_normalization_scale);
-            Eigen::VectorXf normalized_residual = residual / std::max(normalization_scale_f, 1e-6f);
-            
-            int num_corr = correspondences.size();
-            
-            // Compute Huber weights using normalized residuals and adaptive delta
-            float huber_threshold = static_cast<float>(adaptive_huber_delta);
-            Eigen::VectorXf huber_weights(num_corr);
-            
-            for (int i = 0; i < num_corr; i++) {
-                float abs_normalized_residual = std::abs(normalized_residual(i));
+         if (correspondences.empty())
+         {
+             break;
+         }
 
-                if (abs_normalized_residual <= huber_threshold) {
-                    // L2 region: w = 1
-                    huber_weights(i) = 1.0f;
-                } else {
-                    // L1 region: w = threshold / |normalized_residual|
-                    huber_weights(i) = huber_threshold / abs_normalized_residual;
-                }
-            }
-            
-            // Compute R_inv with Huber weighting
-            Eigen::VectorXf R_inv(num_corr);
-            for (int i = 0; i < num_corr; i++) {
-                float sigma = m_params.lidar_noise_std * m_params.lidar_noise_std;
-                // Apply Huber weight to measurement noise inverse
-                R_inv(i) = huber_weights(i) / (0.001f + sigma);
-            }
-            
-            // Compute H^T * R_inv (6 x num_corr)
-            Eigen::MatrixXf H_6 = H.block(0, 0, num_corr, 6);
-            Eigen::MatrixXf H_T_R_inv(6, num_corr);
-            for (int i = 0; i < num_corr; i++) {
-                H_T_R_inv.col(i) = H_6.row(i).transpose() * R_inv(i);
-            }
-            
-            // Compute H^T * R^-1 * H (6x6)
-            Eigen::Matrix<float, 6, 6> H_T_R_inv_H = H_T_R_inv * H_6;
-            
-            // Compute H^T * R^-1 * z
-            Eigen::Matrix<float, 6, 1> H_T_R_inv_z = H_T_R_inv * residual;
-            
-            // Get prior covariance P (full 18x18)
-            Eigen::Matrix<float, 18, 18> P_prior = m_current_state.m_covariance;
-            
-            // Build H^T*R^-1*H for full state (18x18)
-            Eigen::Matrix<float, 18, 18> H_T_R_inv_H_full = Eigen::Matrix<float, 18, 18>::Zero();
-            H_T_R_inv_H_full.block<6, 6>(0, 0) = H_T_R_inv_H;
-            
-            // Compute Kalman gain: K_1 = (H^T * R^-1 * H + P^-1)^-1
-            Eigen::Matrix<float, 18, 18> information_matrix = H_T_R_inv_H_full + P_prior.inverse();
-            Eigen::Matrix<float, 18, 18> K_1 = information_matrix.inverse();
-            
-            // Compute G matrix: G = K_1 * H^T*R^-1*H
-            Eigen::Matrix<float, 18, 18> G = Eigen::Matrix<float, 18, 18>::Zero();
-            G.block<18, 6>(0, 0) = K_1.block<18, 6>(0, 0) * H_T_R_inv_H;
-            G_final = G;  // Save for covariance update
-            
-            // Compute state correction
-            Eigen::Matrix<float, 18, 1> dx = K_1.block<18, 6>(0, 0) * H_T_R_inv_z;
-            
-            // Apply state correction
-            ApplyStateCorrection(dx);
-            
-            // Check inner convergence
-            float rot_norm = dx.segment<3>(0).norm();
-            float pos_norm = dx.segment<3>(3).norm();
-            
-            // Inner convergence: state change is small
-            float convergence_threshold_f = static_cast<float>(m_params.convergence_threshold);
-            if (rot_norm < convergence_threshold_f && pos_norm < convergence_threshold_f) {
-                inner_converged = true;
-                break;
-            }
-        }
-        
-        // After inner loop: Check if we need outer re-linearization
-        // If inner loop converged quickly and state didn't change much, we're done
-        if (inner_converged && outer_iter > 0) {
-            converged = true;
-            
-            // Update covariance: P = (I - G) * P
-            Eigen::Matrix<float, 18, 18> I18 = Eigen::Matrix<float, 18, 18>::Identity();
-            Eigen::Matrix<float, 18, 18> P_prior = m_current_state.m_covariance;
-            m_current_state.m_covariance = (I18 - G_final) * P_prior;
-            
-            break;
-        }
-        
-        // If inner loop didn't converge or this is first outer iteration, continue to re-linearize
-    }
+         // INNER LOOP: Update state multiple times with SAME correspondences
+         bool inner_converged = false;
+         Eigen::Matrix<float, 18, 18> G_final;
+
+         for (int inner_iter = 0; inner_iter < max_inner_iterations; inner_iter++)
+         {
+             total_inner_iters++;
+
+             // Compute Jacobian H and residual at current state (with SAME correspondences)
+             Eigen::MatrixXf H;
+             Eigen::VectorXf residual;
+             ComputeLidarJacobians(correspondences, H, residual);
+
+             // Calculate residual normalization scale (only once at first iteration)
+             if (inner_iter == 0 && residual.size() > 0)
+             {
+                 std::vector<double> residuals_for_scale;
+                 residuals_for_scale.reserve(residual.size());
+                 for (int i = 0; i < residual.size(); i++)
+                 {
+                     residuals_for_scale.push_back(static_cast<double>(residual(i)));
+                 }
+                //  std::sort(residuals_for_scale.begin(), residuals_for_scale.end());
+
+                 double mean = std::accumulate(residuals_for_scale.begin(), residuals_for_scale.end(), 0.0) / residuals_for_scale.size();
+                 double variance = 0.0;
+                 for (double val : residuals_for_scale)
+                 {
+                     variance += (val - mean) * (val - mean);
+                 }
+                 variance /= residuals_for_scale.size();
+                 double std_dev = std::sqrt(variance);
+
+                 // Calculate residual normalization scale (std / 3)
+                 residual_normalization_scale = std_dev / 3.0;
+
+                 // spdlog::info("[PKO] Residual normalization scale (std/3): {:.6f}", residual_normalization_scale);
+             }
+
+             // Calculate adaptive Huber scale using PKO with normalized residuals
+             double adaptive_huber_delta = 1.0; // Default value
+             if (m_pko)
+             {
+                 // Convert residuals from float to double and normalize
+                 std::vector<double> residuals_double(residual.size());
+                 for (int i = 0; i < residual.size(); i++)
+                 {
+                     double normalized_residual = static_cast<double>(residual(i)) / std::max(residual_normalization_scale, 1e-6);
+                     residuals_double[i] = normalized_residual;
+                 }
+
+                 // Calculate adaptive scale factor (alpha) using normalized residuals
+                 adaptive_huber_delta = m_pko->CalculateScaleFactor(residuals_double);
+
+                 // spdlog::info("[PKO] Outer iter {}, Inner iter {}: alpha = {:.6f}", outer_iter, inner_iter, adaptive_huber_delta);
+             }
+
+             // Normalize residuals for numerical stability
+             float normalization_scale_f = static_cast<float>(residual_normalization_scale);
+             Eigen::VectorXf normalized_residual = residual / std::max(normalization_scale_f, 1e-6f);
+
+             int num_corr = correspondences.size();
+
+             // Compute Huber weights using normalized residuals and adaptive delta
+             float huber_threshold = static_cast<float>(adaptive_huber_delta);
+             Eigen::VectorXf huber_weights(num_corr);
+
+             for (int i = 0; i < num_corr; i++)
+             {
+                 float abs_normalized_residual = std::abs(normalized_residual(i));
+
+                 if (abs_normalized_residual <= huber_threshold)
+                 {
+                     // L2 region: w = 1
+                     huber_weights(i) = 1.0f;
+                 }
+                 else
+                 {
+                     // L1 region: w = threshold / |normalized_residual|
+                     huber_weights(i) = huber_threshold / abs_normalized_residual;
+                 }
+             }
+
+             // Compute R_inv with Huber weighting
+             Eigen::VectorXf R_inv(num_corr);
+             for (int i = 0; i < num_corr; i++)
+             {
+                 float sigma = m_params.lidar_noise_std * m_params.lidar_noise_std;
+                 // Apply Huber weight to measurement noise inverse
+                 R_inv(i) = huber_weights(i) / (0.001f + sigma);
+             }
+
+             // Compute H^T * R_inv (6 x num_corr)
+             Eigen::MatrixXf H_6 = H.block(0, 0, num_corr, 6);
+             Eigen::MatrixXf H_T_R_inv(6, num_corr);
+             for (int i = 0; i < num_corr; i++)
+             {
+                 H_T_R_inv.col(i) = H_6.row(i).transpose() * R_inv(i);
+             }
+
+             // Compute H^T * R^-1 * H (6x6)
+             Eigen::Matrix<float, 6, 6> H_T_R_inv_H = H_T_R_inv * H_6;
+
+             // Compute H^T * R^-1 * z
+             Eigen::Matrix<float, 6, 1> H_T_R_inv_z = H_T_R_inv * residual;
+
+             // Get prior covariance P (full 18x18)
+             Eigen::Matrix<float, 18, 18> P_prior = m_current_state.m_covariance;
+
+             // Build H^T*R^-1*H for full state (18x18)
+             Eigen::Matrix<float, 18, 18> H_T_R_inv_H_full = Eigen::Matrix<float, 18, 18>::Zero();
+             H_T_R_inv_H_full.block<6, 6>(0, 0) = H_T_R_inv_H;
+
+             // Compute Kalman gain: K_1 = (H^T * R^-1 * H + P^-1)^-1
+             Eigen::Matrix<float, 18, 18> information_matrix = H_T_R_inv_H_full + P_prior.inverse();
+             Eigen::Matrix<float, 18, 18> K_1 = information_matrix.inverse();
+
+             // Compute G matrix: G = K_1 * H^T*R^-1*H
+             Eigen::Matrix<float, 18, 18> G = Eigen::Matrix<float, 18, 18>::Zero();
+             G.block<18, 6>(0, 0) = K_1.block<18, 6>(0, 0) * H_T_R_inv_H;
+             G_final = G; // Save for covariance update
+
+             // Compute state correction
+             Eigen::Matrix<float, 18, 1> dx = K_1.block<18, 6>(0, 0) * H_T_R_inv_z;
+
+             // Apply state correction
+             ApplyStateCorrection(dx);
+
+             // Check inner convergence
+             float rot_norm = dx.segment<3>(0).norm();
+             float pos_norm = dx.segment<3>(3).norm();
+
+             // Inner convergence: state change is small
+             float convergence_threshold_f = static_cast<float>(m_params.convergence_threshold);
+             if (rot_norm < convergence_threshold_f && pos_norm < convergence_threshold_f)
+             {
+                 inner_converged = true;
+                 break;
+             }
+         }
+
+         // After inner loop: Check if we need outer re-linearization
+         // If inner loop converged quickly and state didn't change much, we're done
+         if (inner_converged && outer_iter > 0)
+         {
+             converged = true;
+
+             // Update covariance: P = (I - G) * P
+             Eigen::Matrix<float, 18, 18> I18 = Eigen::Matrix<float, 18, 18>::Identity();
+             Eigen::Matrix<float, 18, 18> P_prior = m_current_state.m_covariance;
+             m_current_state.m_covariance = (I18 - G_final) * P_prior;
+
+             break;
+         }
+
+         // If inner loop didn't converge or this is first outer iteration, continue to re-linearize
+     }
 
     m_last_correspondences = correspondences;
 }
@@ -809,40 +864,10 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     Eigen::Matrix3f R_wb = m_current_state.m_rotation;
     Eigen::Vector3f t_wb = m_current_state.m_position;
     
-    // ===== Keyframe Check (Distance/Rotation based) =====
-    bool is_keyframe = false;
+    // Every frame is a keyframe (always add to map)
+    bool is_keyframe = true;
     
-    if (m_first_keyframe) {
-        // First frame is always a keyframe
-        is_keyframe = true;
-        m_first_keyframe = false;
-        m_last_keyframe_position = t_wb;
-        m_last_keyframe_rotation = R_wb;
-        
-        spdlog::info("[Estimator] First keyframe inserted");
-    } 
-    else 
-    {
-        // Calculate translation distance from last keyframe
-        Eigen::Vector3f translation_diff = t_wb - m_last_keyframe_position;
-        float translation_distance = translation_diff.norm();
-        
-        // Calculate rotation angle from last keyframe
-        Eigen::Matrix3f R_diff = R_wb * m_last_keyframe_rotation.transpose();
-        Eigen::AngleAxisf angle_axis(R_diff);
-        float rotation_angle_rad = std::abs(angle_axis.angle());
-        float rotation_angle_deg = rotation_angle_rad * 180.0f / M_PI;
-        
-        // Check thresholds
-        bool translation_exceeded = translation_distance > m_params.keyframe_translation_threshold;
-        bool rotation_exceeded = rotation_angle_deg > m_params.keyframe_rotation_threshold;
-        
-        if (translation_exceeded || rotation_exceeded) {
-            is_keyframe = true;
-        }
-    }
-    
-    // ===== Add new scan to map (only for keyframes) =====
+    // ===== Add new scan to map =====
     auto start_transform = std::chrono::high_resolution_clock::now();
     
     // Transform scan to world frame
@@ -875,33 +900,23 @@ void Estimator::UpdateLocalMap(const PointCloudPtr scan) {
     // Get current sensor position in world frame
     Eigen::Vector3d sensor_position = t_wb.cast<double>();
     
-    // Update voxel map: add new points and update hit counts based on visibility
+    // Update voxel map: add new points and remove voxels outside map box
     if (!m_voxel_map) {
         m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
-        m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
-        m_voxel_map->SetInitHitCount(m_params.init_hit_count);
         m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
         m_voxel_map->SetPlanarityThreshold(static_cast<float>(m_params.map_planarity_threshold));
+        m_voxel_map->SetPointToSurfelThreshold(static_cast<float>(m_params.point_to_surfel_threshold));
+        m_voxel_map->SetMinSurfelInliers(m_params.min_surfel_inliers);
+        m_voxel_map->SetMinLinearityRatio(static_cast<float>(m_params.min_linearity_ratio));
+        m_voxel_map->SetMapBoxMultiplier(static_cast<float>(m_params.map_box_multiplier));
     }
 
     m_voxel_map->UpdateVoxelMap(transformed_scan, sensor_position, m_params.max_map_distance, is_keyframe);
     auto end_voxelmap_update = std::chrono::high_resolution_clock::now();
     double voxelmap_update_time = std::chrono::duration<double, std::milli>(end_voxelmap_update - start_voxelmap_update).count();
     
-    // Update last keyframe pose if this is a keyframe
-    if (is_keyframe) {
-        m_last_keyframe_position = t_wb;
-        m_last_keyframe_rotation = R_wb;
-    }
-    
-    // Note: m_map_cloud is not updated here since VoxelMap holds the actual map
-    // If needed for visualization, it can be reconstructed from VoxelMap
-    
     auto end_total = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double, std::milli>(end_total - start_total).count();
-
-    
-
 }
 
 void Estimator::CleanLocalMap() {
@@ -929,10 +944,12 @@ void Estimator::CleanLocalMap() {
         // Rebuild VoxelMap after cleaning
         if (!m_map_cloud->empty()) {
             m_voxel_map = std::make_shared<VoxelMap>(static_cast<float>(m_params.voxel_size));
-            m_voxel_map->SetMaxHitCount(m_params.max_voxel_hit_count);
-            m_voxel_map->SetInitHitCount(m_params.init_hit_count);
             m_voxel_map->SetHierarchyFactor(m_params.voxel_hierarchy_factor);
             m_voxel_map->SetPlanarityThreshold(static_cast<float>(m_params.map_planarity_threshold));
+            m_voxel_map->SetPointToSurfelThreshold(static_cast<float>(m_params.point_to_surfel_threshold));
+            m_voxel_map->SetMinSurfelInliers(m_params.min_surfel_inliers);
+            m_voxel_map->SetMinLinearityRatio(static_cast<float>(m_params.min_linearity_ratio));
+            m_voxel_map->SetMapBoxMultiplier(static_cast<float>(m_params.map_box_multiplier));
             m_voxel_map->AddPointCloud(m_map_cloud);
             spdlog::debug("[Estimator] VoxelMap rebuilt after cleaning");
         }

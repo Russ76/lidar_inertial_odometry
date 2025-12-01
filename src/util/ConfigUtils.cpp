@@ -35,16 +35,21 @@ void SetDefaultConfig(LIOConfig& config) {
     config.estimator.convergence_threshold = 1e-4;
     config.estimator.scan_planarity_threshold = 0.1;  // Relaxed threshold for input scan downsampling
     config.estimator.map_planarity_threshold = 0.01;  // Strict threshold for VoxelMap surfel
+    config.estimator.point_to_surfel_threshold = 0.1; // Max distance from point to surfel (meters)
+    config.estimator.min_surfel_inliers = 5;          // Minimum inlier count for valid surfel
+    config.estimator.min_linearity_ratio = 0.3;       // Min σ₁/σ₀ to reject edges
     config.estimator.min_distance = 0.5;
     config.estimator.max_distance = 50.0;
-    config.estimator.max_voxel_hit_count = 10;
-    config.estimator.init_hit_count = 1;  // Initial hit count for new points
+    config.estimator.map_box_multiplier = 2.0;  // Map box size = max_distance × 2
     config.estimator.voxel_hierarchy_factor = 3;  // Default: 3×3×3 (L1 = 3 × L0)
     config.estimator.frustum_fov_horizontal = 90.0;
     config.estimator.frustum_fov_vertical = 90.0;
     config.estimator.frustum_max_range = 50.0;
     config.estimator.keyframe_translation_threshold = 0.5;  // Default: 0.5 meters
     config.estimator.keyframe_rotation_threshold = 10.0;    // Default: 10 degrees
+    config.estimator.temporal_bins = 1000;                  // Default: 1000 temporal bins
+    config.estimator.temporal_then_voxel = false;           // Default: temporal only
+    config.estimator.scan_duration = 0.1;                   // Default: 0.1 seconds
     
     // Viewer parameters
     config.viewer.window_width = 1920;
@@ -125,10 +130,8 @@ bool LoadConfig(const std::string& config_path, LIOConfig& config) {
                 config.estimator.min_distance = estimator["min_distance"].as<double>();
             if (estimator["max_distance"]) 
                 config.estimator.max_distance = estimator["max_distance"].as<double>();
-            if (estimator["max_voxel_hit_count"]) 
-                config.estimator.max_voxel_hit_count = estimator["max_voxel_hit_count"].as<int>();
-            if (estimator["init_hit_count"]) 
-                config.estimator.init_hit_count = estimator["init_hit_count"].as<int>();
+            if (estimator["map_box_multiplier"]) 
+                config.estimator.map_box_multiplier = estimator["map_box_multiplier"].as<double>();
             if (estimator["voxel_hierarchy_factor"]) {
                 config.estimator.voxel_hierarchy_factor = estimator["voxel_hierarchy_factor"].as<int>();
                 // Validate: must be odd number (3, 5, 7, etc.)
@@ -147,10 +150,22 @@ bool LoadConfig(const std::string& config_path, LIOConfig& config) {
                 config.estimator.keyframe_translation_threshold = estimator["keyframe_translation_threshold"].as<double>();
             if (estimator["keyframe_rotation_threshold"]) 
                 config.estimator.keyframe_rotation_threshold = estimator["keyframe_rotation_threshold"].as<double>();
+            if (estimator["temporal_bins"]) 
+                config.estimator.temporal_bins = estimator["temporal_bins"].as<int>();
+            if (estimator["temporal_then_voxel"]) 
+                config.estimator.temporal_then_voxel = estimator["temporal_then_voxel"].as<bool>();
+            if (estimator["scan_duration"]) 
+                config.estimator.scan_duration = estimator["scan_duration"].as<double>();
             if (estimator["scan_planarity_threshold"]) 
                 config.estimator.scan_planarity_threshold = estimator["scan_planarity_threshold"].as<double>();
             if (estimator["map_planarity_threshold"]) 
                 config.estimator.map_planarity_threshold = estimator["map_planarity_threshold"].as<double>();
+            if (estimator["point_to_surfel_threshold"]) 
+                config.estimator.point_to_surfel_threshold = estimator["point_to_surfel_threshold"].as<double>();
+            if (estimator["min_surfel_inliers"]) 
+                config.estimator.min_surfel_inliers = estimator["min_surfel_inliers"].as<int>();
+            if (estimator["min_linearity_ratio"]) 
+                config.estimator.min_linearity_ratio = estimator["min_linearity_ratio"].as<double>();
         }
         
         // Load viewer parameters

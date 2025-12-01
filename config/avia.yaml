@@ -21,49 +21,42 @@ extrinsics:
   t_il: [0.04165, 0.02326, -0.0284]
 
 
+
 # Estimator parameters (indoor: 0.5 / 5 / 1.0, outdoor: 1.0 / 3 / 2.0)
 estimator:
   enable_undistortion: true
   scan_duration: 0.1          # LiDAR scan duration in seconds (100ms for Livox Avia)
-  init_imu_samples: 300       # Number of IMU samples for initialization
+  init_imu_samples: 500       # Number of IMU samples for initialization
   voxel_size: 0.5       # Voxel size in meters for VoxelMap
-  max_iterations: 4         # Maximum Gauss-Newton iterations
-  convergence_threshold: 0.005 # Convergence threshold for optimization
+  max_iterations: 2       # Maximum Gauss-Newton iterations
+  convergence_threshold: 0.001 # Convergence threshold for optimization
 
-  map_planarity_threshold: 0.3  # Planarity threshold for VoxelMap surfel creation
+  # Surfel filtering
+  map_planarity_threshold: 0.3    # Planarity threshold (sigma_min/sigma_max, smaller = stricter)
+
+  # Temporal bin downsampling (alternative to voxel-based downsampling)
+  temporal_bins: 10000           # Number of bins for temporal downsampling (0 = use voxel-based)
+                                # offset_time [0~scan_duration] is divided into N bins
+                                # Only one point per bin is kept (first-come basis)
+  temporal_then_voxel: true    # Apply voxel downsample after temporal bin (combined filtering)
 
   # Local map parameters
-  min_distance: 1.0             # Minimum distance for lidar filtering (meters)
+  min_distance: 3.0             # Minimum distance for lidar filtering (meters)
   max_distance: 100.0           # Maximum distance for lidar filtering (meters)
-  max_voxel_hit_count: 1000     # Maximum hit count for voxel occupancy (1-N, default: 10)
-  init_hit_count: 1000            # Initial hit count when adding new points to voxel
-  voxel_hierarchy_factor: 3      # L1 voxel factor: L1 = factor × L0 (e.g., 3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7)
-
-  # Keyframe parameters (distance/rotation based)
-  keyframe_translation_threshold: 1.0   # meters - triggers keyframe when moved > threshold
-  keyframe_rotation_threshold: 5.0     # ignore rotation based keyframe creation
-                                         # Translation: Larger (1.0m) = fewer KF, Smaller (0.2m) = more KF
-                                         # Rotation: Larger (20°) = fewer KF, Smaller (5°) = more KF
-                                         # Recommended: trans=0.3-0.7m, rot=5-15°
+  map_box_multiplier: 2.0       # Map box size = max_distance × multiplier (e.g., 100m × 2 = 200m box)
+                                # Map is re-centered when sensor moves > max_distance/multiplier from center
+  voxel_hierarchy_factor: 3     # L1 voxel factor: L1 = factor × L0 (e.g., 3 = 3×3×3, 5 = 5×5×5, 7 = 7×7×7)
 
 
 # Viewer parameters
 viewer:
   window_width: 1920
   window_height: 1080
- 
 
 # Playback parameters
 playback:
-  playback_speed: 10.0          # Playback speed multiplier
+  playback_speed: 1000.0          # Playback speed multiplier
 
-
-# imu:
-#   gyro_noise_density: 0.01     # Gyroscope noise density [rad/s/sqrt(Hz)]
-#   acc_noise_density: 0.1      # Accelerometer noise density [m/s^2/sqrt(Hz)]
-#   gyro_bias_random_walk: 0.0001  # Gyroscope bias random walk [rad/s^2/sqrt(Hz)]
-#   acc_bias_random_walk: 0.001   # Accelerometer bias random walk [m/s^3/sqrt(Hz)]
-#   gravity: [0.0, 0.0, -9.81]      # Gravity vector [m/s^2]
 
 
 imu:

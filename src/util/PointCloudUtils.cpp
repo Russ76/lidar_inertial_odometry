@@ -100,17 +100,18 @@ void VoxelGrid::Filter(PointCloud& output) {
         // total_voxels++;
         
         // // If planarity filter enabled, check planarity score (need at least 3 points)
-        // if (m_enable_planarity_filter && voxel.second.GetPointCount() >= 3) {
-        //     checked_voxels++;
-        //     float planarity = voxel.second.CalculatePlanarity();
-        //     // Keep only planar voxels (low planarity score = more planar)
-        //     if (planarity > 0.01f) {
-        //         skipped_voxels++;
-        //         continue;  // Skip non-planar voxels
-        //     }
-        //     passed_voxels++;
-        // }
+        // if (voxel.second.GetPointCount() >= 2) {
+        //     // checked_voxels++;
+        //     // float planarity = voxel.second.CalculatePlanarity();
+        //     // // Keep only planar voxels (low planarity score = more planar)
+        //     // if (planarity > 0.1f) {
+        //     //     // skipped_voxels++;
+        //     //     continue;  // Skip non-planar voxels
+        //     // }
+        //     // passed_voxels++;
         output.push_back(voxel.second.GetCentroid());
+
+        // }
     }
     
     // if (m_enable_planarity_filter) {
@@ -211,6 +212,47 @@ void FrustumFilter::Filter(PointCloud& output) {
     auto end_time = std::chrono::high_resolution_clock::now();
     double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
     
+}
+
+PointCloud::Ptr TemporalBinDownsample(
+    const PointCloud::ConstPtr& input,
+    int num_bins,
+    float scan_duration) {
+    
+    auto output = std::make_shared<PointCloud>();
+    
+    if (!input || input->empty() || num_bins <= 0) {
+        return output;
+    }
+    
+    // Create bin occupancy array (false = empty, true = occupied)
+    std::vector<bool> bin_occupied(num_bins, false);
+    
+    // Reserve estimated output size
+    output->reserve(std::min(static_cast<size_t>(num_bins), input->size()));
+    
+    // Bin width in seconds
+    float bin_width = scan_duration / static_cast<float>(num_bins);
+    
+    // Process each point
+    for (size_t i = 0; i < input->size(); ++i) {
+        const auto& point = input->at(i);
+        
+        // Calculate bin index from offset_time
+        // offset_time should be in range [0, scan_duration]
+        int bin_idx = static_cast<int>(point.offset_time / bin_width);
+        
+        // Clamp to valid range
+        bin_idx = std::max(0, std::min(bin_idx, num_bins - 1));
+        
+        // If bin is empty, add point and mark as occupied
+        if (!bin_occupied[bin_idx]) {
+            bin_occupied[bin_idx] = true;
+            output->push_back(point);
+        }
+    }
+    
+    return output;
 }
 
 } // namespace lio

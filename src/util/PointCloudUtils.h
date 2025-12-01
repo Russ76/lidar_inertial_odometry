@@ -597,6 +597,28 @@ private:
     PointCloud::ConstPtr m_input_cloud;
 };
 
+/**
+ * @brief Temporal bin-based downsampling for LiDAR scans
+ * 
+ * Instead of spatial voxel-based downsampling, this function uses offset_time
+ * to create temporal bins. For a scan duration of 0~0.1s with N bins,
+ * each bin covers (scan_duration / N) seconds. Only the first point in each bin is kept.
+ * 
+ * Benefits:
+ * - Uniform temporal distribution (good for motion compensation)
+ * - Predictable output size (max N points)
+ * - No voxel grid overhead
+ * 
+ * @param input Input point cloud with offset_time field set
+ * @param num_bins Number of temporal bins (e.g., 1000 for ~1000 output points)
+ * @param scan_duration Total scan duration in seconds (default 0.1s)
+ * @return Downsampled point cloud
+ */
+PointCloud::Ptr TemporalBinDownsample(
+    const PointCloud::ConstPtr& input,
+    int num_bins,
+    float scan_duration = 0.1f);
+
 } // namespace lio
 
 #endif // POINT_CLOUD_UTILS_H

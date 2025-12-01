@@ -156,6 +156,48 @@ public:
     void SetPlanarityThreshold(float threshold) { m_planarity_threshold = threshold; }
     
     /**
+     * @brief Set point-to-surfel distance threshold
+     * @param threshold Maximum distance from point to surfel plane (meters)
+     *                  Points within this distance are considered inliers
+     */
+    void SetPointToSurfelThreshold(float threshold) { m_point_to_surfel_threshold = threshold; }
+    
+    /**
+     * @brief Set minimum inlier count for valid surfel
+     * @param count Minimum number of points within point_to_surfel_threshold
+     */
+    void SetMinSurfelInliers(int count) { m_min_surfel_inliers = count; }
+    
+    /**
+     * @brief Set minimum linearity ratio for plane detection (edge rejection)
+     * @param ratio Minimum σ₁/σ₀ ratio (higher = reject more edge-like structures)
+     *              Plane: σ₀ ≈ σ₁ >> σ₂ → ratio ≈ 1.0
+     *              Edge:  σ₀ >> σ₁ ≈ σ₂ → ratio ≈ 0.0
+     */
+    void SetMinLinearityRatio(float ratio) { m_min_linearity_ratio = ratio; }
+    
+    /**
+     * @brief Set map box multiplier (box_size = max_distance × multiplier)
+     * @param multiplier Box size multiplier (default: 2.0)
+     */
+    void SetMapBoxMultiplier(float multiplier) { m_map_box_multiplier = multiplier; }
+    
+    /**
+     * @brief Get map box multiplier
+     */
+    float GetMapBoxMultiplier() const { return m_map_box_multiplier; }
+    
+    /**
+     * @brief Get current map center
+     */
+    Eigen::Vector3f GetMapCenter() const { return m_map_center; }
+    
+    /**
+     * @brief Check if map has been initialized (first point added)
+     */
+    bool IsMapInitialized() const { return m_map_initialized; }
+    
+    /**
      * @brief Get current hierarchy factor
      */
     int GetHierarchyFactor() const { return m_hierarchy_factor; }
@@ -330,6 +372,15 @@ private:
     int m_init_hit_count = 1; ///< Initial hit count for new voxels (default: 1)
     int m_hierarchy_factor; ///< L1 voxel factor: L1 = factor × L0 (default: 3 for 3×3×3)
     float m_planarity_threshold = 0.01f; ///< Planarity threshold for surfel creation (sigma_min/sigma_max)
+    float m_point_to_surfel_threshold = 0.1f; ///< Max distance from point to surfel plane (meters)
+    int m_min_surfel_inliers = 5; ///< Minimum inlier count for valid surfel
+    float m_min_linearity_ratio = 0.3f; ///< Min σ₁/σ₀ ratio to reject edges (higher = stricter)
+    
+    // ===== Map Box Parameters =====
+    float m_map_box_multiplier = 2.0f;  ///< Box size = max_distance × multiplier
+    Eigen::Vector3f m_map_center = Eigen::Vector3f::Zero();  ///< Current map center
+    bool m_map_initialized = false;  ///< True after first point cloud is added
+    float m_max_distance = 100.0f;  ///< Max sensor distance (for box size calculation)
     
     // ===== Hierarchical Voxel Structure (2 Levels) =====
     

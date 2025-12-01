@@ -42,12 +42,14 @@ struct LIOConfig {
         // Planarity filtering parameters
         double scan_planarity_threshold;  // Planarity threshold for input scan downsampling (relaxed)
         double map_planarity_threshold;   // Planarity threshold for VoxelMap surfel creation (strict)
+        double point_to_surfel_threshold; // Max distance from point to surfel plane (meters)
+        int min_surfel_inliers;           // Minimum inlier count for valid surfel
+        double min_linearity_ratio;       // Min σ₁/σ₀ ratio to reject edges (higher = stricter)
         
         // Local map parameters
         double min_distance;            // Minimum distance for lidar filtering (meters)
         double max_distance;            // Maximum distance for map points (meters)
-        int max_voxel_hit_count;        // Maximum hit count for voxel occupancy (1-N)
-        int init_hit_count;             // Initial hit count when adding new points
+        double map_box_multiplier;      // Map box size = max_distance × multiplier
         int voxel_hierarchy_factor;     // L1 voxel factor: L1 = factor × L0 (3 = 3×3×3, 5 = 5×5×5, etc.)
         double frustum_fov_horizontal;  // Frustum FOV horizontal (degrees)
         double frustum_fov_vertical;    // Frustum FOV vertical (degrees)
@@ -56,6 +58,10 @@ struct LIOConfig {
         // Keyframe parameters (distance/rotation based)
         double keyframe_translation_threshold;  // meters - triggers keyframe when moved > threshold
         double keyframe_rotation_threshold;     // degrees - triggers keyframe when rotated > threshold
+        
+        // Temporal bin downsampling
+        int temporal_bins;                      // Number of bins for temporal downsampling (0 = use voxel)
+        bool temporal_then_voxel;               // Apply voxel downsample after temporal bin (default: false)
     } estimator;
     
     // Viewer parameters

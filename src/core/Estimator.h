@@ -159,6 +159,9 @@ public:
                                                    // Filters non-planar voxels during downsampling (~50% reduction)
         double map_planarity_threshold = 0.01;    // Threshold for VoxelMap surfel creation (strict)
                                                    // Must be stricter than scan_planarity_threshold
+        double point_to_surfel_threshold = 0.1;   // Max distance from point to surfel plane (meters)
+        int min_surfel_inliers = 5;               // Minimum inlier count for valid surfel
+        double min_linearity_ratio = 0.3;         // Min σ₁/σ₀ ratio to reject edges
         
         // Local map parameters
         double voxel_size = 0.4;              // m (voxel size for downsampling and VoxelMap)
@@ -166,8 +169,7 @@ public:
         int max_map_points = 100000;
         double min_range = 0.5;               // m (minimum range for point filtering)
         double max_map_distance = 50.0;       // m
-        int max_voxel_hit_count = 10;         // Maximum hit count for voxel occupancy
-        int init_hit_count = 1;               // Initial hit count when adding new points
+        double map_box_multiplier = 2.0;      // Map box size = max_distance × multiplier
         int voxel_hierarchy_factor = 3;       // L1 voxel factor: L1 = factor × L0 (3, 5, 7, etc.)
         double min_plane_points = 5;
         
@@ -191,6 +193,11 @@ public:
         double min_motion_threshold = 0.1;     // m
         int imu_buffer_size = 1000;
         bool enable_undistortion = true;
+        
+        // Temporal bin downsampling
+        int temporal_bins = 1000;              // Number of bins for temporal downsampling (0 = use voxel)
+        bool temporal_then_voxel = false;      // Apply voxel downsample after temporal bin
+        double scan_duration = 0.1;            // LiDAR scan duration in seconds
     } m_params;
 
 private:
@@ -267,6 +274,11 @@ private:
     mutable std::mutex m_stats_mutex;
     Statistics m_statistics;
     std::vector<double> m_processing_times;
+    
+    // Timing accumulators (for 100-frame average logging)
+    double m_sum_preprocess_time = 0.0;
+    double m_sum_iekf_time = 0.0;
+    double m_sum_map_time = 0.0;
     
     // Kalman filter matrices (float for performance, timestamp still double)
     Eigen::Matrix<float, 18, 18> m_process_noise;      // Q

@@ -195,106 +195,91 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         spdlog::warn("[VoxelMap] UpdateVoxelMap called with empty point cloud");
         return;
     }
+    
     // Only add new points for keyframes
     if (!is_keyframe) {
         return;
     }
     
-    auto start_total = std::chrono::high_resolution_clock::now();
+    // Store max_distance for box size calculation
+    m_max_distance = static_cast<float>(max_distance);
     
-    // Step 1: Add new points (creates new voxels OR updates existing centroid)
-    auto start_step1 = std::chrono::high_resolution_clock::now();
-    AddPointCloud(new_cloud);
-    auto end_step1 = std::chrono::high_resolution_clock::now();
-    double time_step1 = std::chrono::duration<double, std::milli>(end_step1 - start_step1).count();
-
-    // Step 2: Mark L0 voxels - L1-based efficient marking
-    auto start_step2 = std::chrono::high_resolution_clock::now();
-    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> hit_voxels_L0_set;
-    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> hit_L1_set;
+    Eigen::Vector3f sensor_pos = sensor_position.cast<float>();
     
-    // First, collect all L1 voxels containing the new points
-    for (const auto& pt : *new_cloud) {
-        VoxelKey key_L1 = PointToVoxelKey(pt, 1);
-        hit_L1_set.insert(key_L1);
+    // Box geometry:
+    // - box_half_size = max_distance × multiplier (e.g., 100m × 2 = 200m from center)
+    // - Total box size = 2 × box_half_size = 400m × 400m × 400m
+    // - Re-center trigger = max_distance / multiplier (e.g., 100m / 2 = 50m)
+    float box_half_size = m_max_distance * m_map_box_multiplier;
+    float recenter_threshold = m_max_distance / m_map_box_multiplier;
+    
+    // === Step 1: Initialize map center on first frame ===
+    if (!m_map_initialized) {
+        m_map_center = sensor_pos;
+        m_map_initialized = true;
+        spdlog::info("[VoxelMap] Map initialized at center: ({:.1f}, {:.1f}, {:.1f}), box size: {:.1f}m x {:.1f}m", 
+                     m_map_center.x(), m_map_center.y(), m_map_center.z(), 
+                     box_half_size * 2.0f, box_half_size * 2.0f);
     }
     
-    // Then, mark all occupied L0 voxels within those L1 voxels
-    for (const VoxelKey& key_L1 : hit_L1_set) {
-        auto it_L1 = m_voxels_L1.find(key_L1);
-        if (it_L1 == m_voxels_L1.end()) continue;
-        
-        // Mark all occupied L0 children
-        for (const VoxelKey& key_L0 : it_L1->second.occupied_children) {
-            hit_voxels_L0_set.insert(key_L0);
-        }
-    }
-    auto end_step2 = std::chrono::high_resolution_clock::now();
-    double time_step2 = std::chrono::duration<double, std::milli>(end_step2 - start_step2).count();
+    // === Step 2: Check if we need to re-center the map ===
+    float dist_from_center = (sensor_pos - m_map_center).norm();
+    bool need_recenter = dist_from_center > recenter_threshold;
     
-    // Step 3: Update hit counts for all existing L0 voxels
-    auto start_step3 = std::chrono::high_resolution_clock::now();
-    std::vector<VoxelKey> voxels_to_remove;
-    
-    for (auto& pair : m_voxels_L0) {
-        const VoxelKey& key = pair.first;
-        VoxelNode_L0& voxel_data = pair.second;
+    if (need_recenter) {
+        // Move map center to current sensor position
+        Eigen::Vector3f old_center = m_map_center;
+        m_map_center = sensor_pos;
         
-        // Check if this voxel was hit by the current scan
-        if (hit_voxels_L0_set.find(key) != hit_voxels_L0_set.end()) {
-            // Voxel is within culling distance of new scan -> increment hit count (up to max)
-            if (voxel_data.hit_count < m_max_hit_count) {
-                voxel_data.hit_count = m_max_hit_count;
-            }
-        } else {
-            // Voxel is not hit -> decrement hit count by 1
-            voxel_data.hit_count-=1;
+        // === Step 3: Remove voxels outside the new box ===
+        std::vector<VoxelKey> voxels_to_remove;
+        
+        for (const auto& pair : m_voxels_L0) {
+            const VoxelKey& key = pair.first;
+            Eigen::Vector3f voxel_center = VoxelKeyToCenter(key);
             
-            // Mark for removal if hit count drops below 1
-            if (voxel_data.hit_count < 1) {
+            // Check if voxel is outside the new box (axis-aligned bounding box)
+            bool outside_box = 
+                std::abs(voxel_center.x() - m_map_center.x()) > box_half_size ||
+                std::abs(voxel_center.y() - m_map_center.y()) > box_half_size ||
+                std::abs(voxel_center.z() - m_map_center.z()) > box_half_size;
+            
+            if (outside_box) {
                 voxels_to_remove.push_back(key);
             }
         }
-    }
-    auto end_step3 = std::chrono::high_resolution_clock::now();
-    double time_step3 = std::chrono::duration<double, std::milli>(end_step3 - start_step3).count();
-    
-    // Step 4: Remove L0 voxels with hit_count < 1 and update hierarchy
-    auto start_step4 = std::chrono::high_resolution_clock::now();
-    for (const auto& key : voxels_to_remove) {
-        UnregisterFromParent(key);  // Remove from L1 hierarchy
-        m_voxels_L0.erase(key);
-    }
-    auto end_step4 = std::chrono::high_resolution_clock::now();
-    double time_step4 = std::chrono::duration<double, std::milli>(end_step4 - start_step4).count();
-    
-    // Step 5: Update L1 hit counts based on affected parents
-    auto start_step5 = std::chrono::high_resolution_clock::now();
-    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> affected_L1;
-    
-    for (const VoxelKey& hit_L0 : hit_voxels_L0_set) {
-        VoxelKey parent_L1 = GetParentKey(hit_L0);
-        affected_L1.insert(parent_L1);
-    }
-    
-    // Update L1 hit counts
-    for (const VoxelKey& key_L1 : affected_L1) {
-        auto it = m_voxels_L1.find(key_L1);
-        if (it != m_voxels_L1.end()) {
-            if (it->second.hit_count < m_max_hit_count) {
-                it->second.hit_count++;
+        
+        // Remove voxels outside the box
+        for (const auto& key : voxels_to_remove) {
+            UnregisterFromParent(key);
+            m_voxels_L0.erase(key);
+        }
+        
+        // Also remove L1 voxels that have no children
+        std::vector<VoxelKey> L1_to_remove;
+        for (const auto& pair : m_voxels_L1) {
+            if (pair.second.occupied_children.empty()) {
+                L1_to_remove.push_back(pair.first);
             }
         }
+        for (const auto& key : L1_to_remove) {
+            m_voxels_L1.erase(key);
+        }
     }
-    auto end_step5 = std::chrono::high_resolution_clock::now();
-    double time_step5 = std::chrono::duration<double, std::milli>(end_step5 - start_step5).count();
     
-    // Step 6: Create/update surfels for affected L1 voxels
-    auto start_step6 = std::chrono::high_resolution_clock::now();
-    const int MIN_OCCUPIED_CHILDREN = 5;  // Minimum 5 occupied L0 voxels required to create surfel
+    // === Step 4: Add new points ===
+    AddPointCloud(new_cloud);
     
-    int surfels_created = 0;
-    int surfels_skipped = 0;
+    // === Step 5: Collect affected L1 voxels for surfel update ===
+    ankerl::unordered_dense::set<VoxelKey, VoxelKeyHash> affected_L1;
+    
+    for (const auto& pt : *new_cloud) {
+        VoxelKey key_L1 = PointToVoxelKey(pt, 1);
+        affected_L1.insert(key_L1);
+    }
+    
+    // === Step 6: Create/update surfels for affected L1 voxels ===
+    const int MIN_OCCUPIED_CHILDREN = 5;
     
     for (const VoxelKey& key_L1 : affected_L1) {
         auto it_L1 = m_voxels_L1.find(key_L1);
@@ -309,26 +294,11 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
             continue;
         }
 
-        // === INCREMENTAL UPDATE: Check if existing surfel is still valid ===
-        if (node_L1.has_surfel)
-        {
-            
-            // Check if geometry changed significantly
-            int child_count_change = std::abs(current_child_count - node_L1.last_child_count);
-
-            // If child count didn't change much, skip!
-            if (child_count_change == 0)
-            {
-
-                surfels_skipped++;
-                surfels_created++; // Count as "created" for statistics
-                continue;
-            }
-            // continue;
+        // Skip if child count didn't change (incremental update)
+        if (node_L1.has_surfel && node_L1.last_child_count == current_child_count) {
+            continue;
         }
 
-        // === FULL UPDATE: Recompute surfel with SVD ===
-        
         // Collect centroids from occupied L0 children
         std::vector<Eigen::Vector3f> collected_centroids;
         collected_centroids.reserve(node_L1.occupied_children.size());
@@ -336,11 +306,13 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         for (const VoxelKey& key_L0 : node_L1.occupied_children) {
             auto it_L0 = m_voxels_L0.find(key_L0);
             if (it_L0 == m_voxels_L0.end()) continue;
-            
-            // Use voxel centroid as representative point
             collected_centroids.push_back(it_L0->second.centroid);
         }
         
+        if (collected_centroids.size() < 3) {
+            node_L1.has_surfel = false;
+            continue;
+        }
     
         // Compute centroid
         Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
@@ -357,44 +329,30 @@ void VoxelMap::UpdateVoxelMap(const PointCloudPtr& new_cloud,
         }
         covariance /= static_cast<float>(collected_centroids.size());
         
-        // SVD decomposition to get eigenvalues and eigenvectors
+        // SVD decomposition
         Eigen::JacobiSVD<Eigen::Matrix3f> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
         Eigen::Vector3f singular_values = svd.singularValues();
-        
-        // Extract plane normal (smallest eigenvector)
         Eigen::Vector3f normal = svd.matrixU().col(2);
-       
-        // Compute planarity score for statistics
         float planarity = singular_values(2) / (singular_values(0) + 1e-6f);
 
-        if(planarity > m_planarity_threshold)
-        {
-            // Not planar enough - delete L1 and all its L0 children immediately
+        if (planarity > m_planarity_threshold) {
+            // Not planar enough - remove L1 and its children
             node_L1.has_surfel = false;
             
-            // Delete all L0 children from m_voxels_L0
             for (const VoxelKey& key_L0 : node_L1.occupied_children) {
                 m_voxels_L0.erase(key_L0);
             }
-            
-            // Erase L1 voxel itself
             m_voxels_L1.erase(it_L1);
-            
             continue;
         }
-       
-       
-      
         
-        // Create surfel and update last child count
+        // Create surfel
         node_L1.has_surfel = true;
         node_L1.surfel_normal = normal;
         node_L1.surfel_centroid = centroid;
         node_L1.surfel_covariance = covariance;
         node_L1.planarity_score = planarity;
         node_L1.last_child_count = current_child_count;
-        surfels_created++;
-        
     }
 }
 
