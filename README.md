@@ -1,4 +1,5 @@
-# Lidar-Inertial Odometry
+# Surfel-LIO
+Fast LiDAR-Inertial Odometry with Pre-computed Surfels and Hierarchical Z-order Voxel Hashing
 
 ### MIT License
 
