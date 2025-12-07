@@ -8,6 +8,7 @@
 
 #ifdef HAVE_JPEG
 #  include <jpeglib.h>
+#  include <cstdint>
 #  ifdef _WIN_
 //   Undef windows Macro polution from jpeglib.h
 #    undef LoadImage

@@ -154,6 +154,12 @@ public:
         return false;
     }
     
+    /**
+     * @brief Render one frame (call from main thread)
+     * @return True if rendering was successful, false if should close
+     */
+    bool Render();
+    
     // ===== Setters for Configuration =====
     
     /**

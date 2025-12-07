@@ -589,7 +589,7 @@ int main(int argc, char** argv) {
             while (!viewer.WasStepForwardRequested() && 
                    !viewer.ShouldClose() && 
                    !viewer.IsAutoPlaybackEnabled()) {  // Exit if auto playback is re-enabled
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
         }
         // In headless mode: no waiting, process as fast as possible

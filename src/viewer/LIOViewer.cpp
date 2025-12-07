@@ -245,6 +245,119 @@ void LIOViewer::UpdateVoxelMap(std::shared_ptr<VoxelMap> voxel_map) {
     m_voxel_map = voxel_map;
 }
 
+bool LIOViewer::Render() {
+    // Check if window should quit
+    if (pangolin::ShouldQuit()) {
+        m_should_stop = true;
+        return false;
+    }
+
+    // Clear screen
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Update camera for follow mode (using Follow method for zoom support)
+    if (m_follow_mode.Get()) {
+        Eigen::Matrix4f current_pose_copy;
+        {
+            std::lock_guard<std::mutex> lock(m_data_mutex);
+            current_pose_copy = m_current_pose;
+        }
+        
+        // Extract current position
+        Eigen::Vector3f current_pos = current_pose_copy.block<3, 1>(0, 3);
+        
+        // Smooth interpolation
+        float follow_speed = 0.1f;
+        m_camera_target = (1.0f - follow_speed) * m_camera_target + 
+                         follow_speed * current_pos;
+        
+        // Create follow matrix for Pangolin Follow() method
+        // This allows user to zoom/pan while following the target
+        pangolin::OpenGlMatrix follow_matrix = pangolin::OpenGlMatrix::Translate(
+            m_camera_target.x(), 
+            m_camera_target.y(), 
+            m_camera_target.z()
+        );
+        
+        // Use Follow method - allows zoom with mouse wheel
+        m_cam_state.Follow(follow_matrix, true);
+        
+        // Set initial top-down view on first activation
+        static bool first_follow_activation = true;
+        if (first_follow_activation) {
+            float initial_height = 50.0f;
+            pangolin::OpenGlMatrix initial_view = pangolin::ModelViewLookAt(
+                m_camera_target.x(), 
+                m_camera_target.y(), 
+                m_camera_target.z() + initial_height,
+                m_camera_target.x(), 
+                m_camera_target.y(), 
+                m_camera_target.z(),
+                0, 1, 0
+            );
+            m_cam_state.SetModelViewMatrix(initial_view);
+            first_follow_activation = false;
+        }
+    }
+
+    // Activate 3D view
+    m_display_3d.Activate(m_cam_state);
+
+    // Copy data once with single lock
+    PointCloudPtr current_cloud_copy;
+    PointCloudPtr map_cloud_copy;
+    std::shared_ptr<VoxelMap> voxel_map_copy;
+    Eigen::Matrix4f current_pose_copy;
+    std::vector<Eigen::Matrix4f> trajectory_copy;
+    
+    {
+        std::lock_guard<std::mutex> lock(m_data_mutex);
+        current_cloud_copy = m_current_cloud;
+        map_cloud_copy = m_map_cloud;
+        voxel_map_copy = m_voxel_map;
+        current_pose_copy = m_current_pose;
+        trajectory_copy = m_trajectory;
+    }
+
+    // Draw 3D content
+    if (m_show_coordinate_frame.Get()) {
+        DrawCoordinateAxes();
+    }
+
+    if (m_show_voxel_cubes.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+        DrawVoxelCubes(voxel_map_copy);  // Draw L0 voxel cubes (heavy)
+    }
+    
+    if (m_show_L1_voxel.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+        DrawL1VoxelCubes(voxel_map_copy);  // Draw L1 voxel cubes (lightweight)
+    }
+    
+    if (m_show_map_points.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+        DrawMapPoints(voxel_map_copy);  // Draw surfel centroids as green points
+    }
+    
+    if (m_show_surfels.Get() && voxel_map_copy && voxel_map_copy->GetVoxelCount() > 0) {
+        DrawSurfels(voxel_map_copy);  // Draw L1 surfels with normals
+    }
+
+    // Draw current scan point cloud
+    if (m_show_point_cloud.Get() && current_cloud_copy && !current_cloud_copy->empty()) {
+        DrawPointCloud();
+    }
+
+    // Draw trajectory and current pose LAST so they appear on top
+    if (m_show_trajectory.Get() && trajectory_copy.size() > 1) {
+        DrawTrajectory();
+    }
+
+    DrawCurrentPose();
+
+    // Swap buffers
+    pangolin::FinishFrame();
+    
+    return true;
+}
+
 void LIOViewer::RenderLoop() {
     spdlog::info("[LIOViewer] Starting render loop");
     
